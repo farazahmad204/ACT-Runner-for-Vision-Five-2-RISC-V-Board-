@@ -38,6 +38,10 @@ JOB_CONFIGS = {
         "Jenkinsfile.uart-single-elf",
         "ci/jenkins/job-config-uart-single-elf.xml",
     ),
+    "riscv-uart-triage": (
+        "Jenkinsfile.uart-triage",
+        "ci/jenkins/job-config-uart-triage.xml",
+    ),
 }
 
 
@@ -136,6 +140,8 @@ def main() -> int:
     print(f"Apollo Jenkins job {action}: {job.get('url', base + '/job/' + quoted_job + '/')}")
     print("Agent label: riscv-hw-agent")
     print("Portal credential: riscv-portal-ingest-token")
+    if args.job in {"vf2-uart-weekly", "bpif3-uart-weekly", "riscv-uart-triage"}:
+        print("Optional AI credential: openai-api-key")
     return 0
 
 

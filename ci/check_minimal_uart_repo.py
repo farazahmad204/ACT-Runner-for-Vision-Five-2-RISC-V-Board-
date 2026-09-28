@@ -12,6 +12,7 @@ ALLOWED_JENKINSFILES = {
     "Jenkinsfile.bpif3-uart-sanity",
     "Jenkinsfile.bpif3-uart-weekly",
     "Jenkinsfile.uart-single-elf",
+    "Jenkinsfile.uart-triage",
 }
 FORBIDDEN_PATHS = {
     "runner_sd.c",
@@ -23,6 +24,11 @@ FORBIDDEN_PATHS = {
     "build_act_pack.py",
     "cert_harness/tools/build_profile.sh",
     "cert_harness/tools/run_profile.sh",
+}
+REQUIRED_TRIAGE_PATHS = {
+    "ci/triage/ci_triage.py",
+    "ci/triage/publish_triage.py",
+    "ci/triage/run_ci_triage.py",
 }
 
 
@@ -45,6 +51,10 @@ def main() -> int:
     present = sorted(path for path in FORBIDDEN_PATHS if (ROOT / path).exists())
     if present:
         errors.append(f"legacy SD/profile files are present: {present}")
+
+    missing_triage = sorted(path for path in REQUIRED_TRIAGE_PATHS if not (ROOT / path).is_file())
+    if missing_triage:
+        errors.append(f"required CI triage files are missing: {missing_triage}")
 
     if errors:
         for error in errors:

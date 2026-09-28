@@ -1,0 +1,152 @@
+pipeline {
+    agent {
+        node {
+            label 'riscv-hw-agent'
+            customWorkspace '/home/lpt-10xe/jenkins-agent/workspace/riscv-uart-triage'
+        }
+    }
+
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        skipDefaultCheckout(true)
+    }
+
+    parameters {
+        string(name: 'RUNNER_BRANCH', defaultValue: 'vf2-uart-stream-jenkins',
+            description: 'Runner branch containing the triage agent.')
+        string(name: 'RUNNER_REVISION_OVERRIDE', defaultValue: '',
+            description: 'Optional exact runner commit.')
+        choice(name: 'SOURCE_JOB', choices: ['vf2-uart-weekly', 'bpif3-uart-weekly'],
+            description: 'Weekly job whose retained artifacts will be analyzed.')
+        string(name: 'SOURCE_BUILD_NUMBER', defaultValue: '1',
+            description: 'Existing Jenkins build number retained in the agent artifact store.')
+        booleanParam(name: 'RUN_LOCAL_AI_TRIAGE', defaultValue: false,
+            description: 'Add advisory analysis using local Ollama; no paid API or key.')
+        string(name: 'LOCAL_AI_MODEL', defaultValue: 'qwen2.5:1.5b',
+            description: 'Ollama model installed on the Jenkins agent.')
+        string(name: 'LOCAL_AI_ENDPOINT', defaultValue: 'http://127.0.0.1:11434/api/generate',
+            description: 'Local Ollama generate endpoint.')
+        string(name: 'LOCAL_AI_MAX_FAILURES', defaultValue: '0',
+            description: 'Maximum failures analyzed locally; 0 means every failure.')
+        booleanParam(name: 'PUBLISH_TO_PORTAL', defaultValue: true,
+            description: 'Attach reports to the existing weekly run in the results portal.')
+        string(name: 'PORTAL_CREDENTIAL_ID', defaultValue: 'riscv-portal-ingest-token',
+            description: 'Jenkins Secret Text credential containing the portal ingest token.')
+    }
+
+    environment {
+        RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
+        ARTIFACT_STORE = '/home/lpt-10xe/jenkins-agent/results-artifacts'
+        PATH = '/usr/local/bin:/usr/bin:/bin'
+    }
+
+    stages {
+        stage('Clean Checkout') {
+            steps {
+                deleteDir()
+                sh '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    branch="${RUNNER_BRANCH:-vf2-uart-stream-jenkins}"
+                    override="${RUNNER_REVISION_OVERRIDE:-}"
+                    git check-ref-format --branch "$branch" >/dev/null
+                    git init .
+                    git remote add origin "$RUNNER_REMOTE_URL"
+                    ref="refs/remotes/origin/$branch"
+                    git fetch --force --prune origin "+refs/heads/$branch:$ref"
+                    fetched="$(git rev-parse --verify "${ref}^{commit}")"
+                    selected="${override:-$fetched}"
+                    selected="$(git rev-parse --verify "$selected^{commit}")"
+                    git checkout --detach "$selected"
+                    test -f ci/triage/run_ci_triage.py
+                '''
+            }
+        }
+
+        stage('Load Retained Run') {
+            steps {
+                sh '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    [[ "$SOURCE_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+                      echo "SOURCE_BUILD_NUMBER must be a positive integer" >&2
+                      exit 2
+                    }
+                    case "$SOURCE_JOB" in
+                      vf2-uart-weekly|bpif3-uart-weekly) ;;
+                      *) echo "Unsupported SOURCE_JOB: $SOURCE_JOB" >&2; exit 2 ;;
+                    esac
+                    source_root="$ARTIFACT_STORE/$SOURCE_JOB/$SOURCE_BUILD_NUMBER"
+                    test -f "$source_root/cases.json" || {
+                      echo "Retained cases.json not found: $source_root/cases.json" >&2
+                      exit 2
+                    }
+                    mkdir -p input state
+                    cp -a "$source_root/." input/
+                '''
+            }
+        }
+
+        stage('Triage Failures') {
+            steps {
+                script {
+                    def command = '''#!/usr/bin/env bash
+                        set -euo pipefail
+                        board=vf2_jh7110
+                        [[ "$SOURCE_JOB" != bpif3-uart-weekly ]] || board=bpif3_k1
+                        args=(
+                          --run-root input
+                          --state-root state
+                          --board "$board"
+                          --provider ollama
+                          --model "$LOCAL_AI_MODEL"
+                          --endpoint "$LOCAL_AI_ENDPOINT"
+                          --max-ai-failures "$LOCAL_AI_MAX_FAILURES"
+                        )
+                        [[ "$RUN_LOCAL_AI_TRIAGE" != true ]] || args+=(--local-ai)
+                        python3 ci/triage/run_ci_triage.py "${args[@]}"
+                    '''
+                    sh command
+                }
+            }
+        }
+
+        stage('Update Existing Portal Run') {
+            when { expression { return params.PUBLISH_TO_PORTAL } }
+            steps {
+                withCredentials([string(credentialsId: params.PORTAL_CREDENTIAL_ID,
+                                        variable: 'PORTAL_INGEST_TOKEN')]) {
+                    sh '''#!/usr/bin/env bash
+                        set -euo pipefail
+                        python3 ci/triage/publish_triage.py \
+                          --run-root input \
+                          --job-name "$SOURCE_JOB" \
+                          --build-number "$SOURCE_BUILD_NUMBER" \
+                          --portal-url 'https://192.168.100.150/portal/' \
+                          --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
+                          --output portal_response.json
+                        python3 -c 'import json, pathlib; r=json.loads(pathlib.Path("portal_response.json").read_text()); pathlib.Path("portal_url.txt").write_text("https://192.168.100.150" + r["url"] + "\n")'
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'input/triage/**',
+                             allowEmptyArchive: true,
+                             fingerprint: true
+            script {
+                def sourceUrl = "https://192.168.100.150/job/${params.SOURCE_JOB}/${params.SOURCE_BUILD_NUMBER}/"
+                def reportUrl = "${env.BUILD_URL}artifact/input/triage/summary.md"
+                def portalUrl = ""
+                if (fileExists('portal_url.txt')) {
+                    portalUrl = readFile('portal_url.txt').trim()
+                }
+                currentBuild.description = "Source: <a href=\"${sourceUrl}\">${params.SOURCE_JOB} #${params.SOURCE_BUILD_NUMBER}</a> | <a href=\"${reportUrl}\">Triage report</a>" + (portalUrl ? " | <a href=\"${portalUrl}\">Portal run</a>" : "")
+            }
+        }
+    }
+}

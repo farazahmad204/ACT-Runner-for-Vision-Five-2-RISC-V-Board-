@@ -45,6 +45,16 @@ pipeline {
             description: 'Publish the normalized weekly run to the results portal.')
         string(name: 'PORTAL_CREDENTIAL_ID', defaultValue: 'riscv-portal-ingest-token',
             description: 'Jenkins secret-text credential containing the portal ingest token.')
+        booleanParam(name: 'RUN_TRIAGE', defaultValue: true,
+            description: 'Generate deterministic evidence reports for every non-PASS case.')
+        booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: false,
+            description: 'Optionally add advisory AI analysis for failed cases; never changes test verdicts.')
+        string(name: 'AI_TRIAGE_MODEL', defaultValue: 'gpt-5',
+            description: 'Organization-approved OpenAI Responses API model for optional analysis.')
+        string(name: 'AI_TRIAGE_CREDENTIAL_ID', defaultValue: 'openai-api-key',
+            description: 'Jenkins Secret Text credential containing the OpenAI API key.')
+        string(name: 'AI_TRIAGE_MAX_FAILURES', defaultValue: '0',
+            description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
     }
 
     environment {
@@ -156,6 +166,43 @@ pipeline {
                   allowEmptyResults: true,
                   keepLongStdio: true
             script {
+                if (params.RUN_TRIAGE) {
+                    def triageCommand = '''#!/usr/bin/env bash
+                        set -euo pipefail
+                        run_root="logs/runs/jenkins_bpif3_uart_weekly_${BUILD_NUMBER}"
+                        state_root="logs/jenkins/bpif3_uart_weekly/jenkins_bpif3_uart_weekly_${BUILD_NUMBER}"
+                        test -f "$run_root/cases.json" || {
+                          echo "Triage skipped: $run_root/cases.json is unavailable"
+                          exit 0
+                        }
+                        args=(
+                          --run-root "$run_root"
+                          --state-root "$state_root"
+                          --board bpif3_k1
+                          --model "$AI_TRIAGE_MODEL"
+                          --max-ai-failures "$AI_TRIAGE_MAX_FAILURES"
+                        )
+                        [[ "$RUN_AI_TRIAGE" != true ]] || args+=(--ai)
+                        python3 ci/triage/run_ci_triage.py "${args[@]}"
+                    '''
+                    def triageRc = 0
+                    if (params.RUN_AI_TRIAGE) {
+                        try {
+                            withCredentials([string(credentialsId: params.AI_TRIAGE_CREDENTIAL_ID,
+                                                    variable: 'OPENAI_API_KEY')]) {
+                                triageRc = sh(script: triageCommand, returnStatus: true)
+                            }
+                        } catch (Exception exc) {
+                            triageRc = 1
+                            echo "Optional AI triage could not start: ${exc.getMessage()}"
+                        }
+                    } else {
+                        triageRc = sh(script: triageCommand, returnStatus: true)
+                    }
+                    if (triageRc != 0) {
+                        echo "ACT CI triage failed with rc=${triageRc}; certification result is unchanged."
+                    }
+                }
                 if (params.PUBLISH_RESULTS) {
                     withCredentials([string(credentialsId: params.PORTAL_CREDENTIAL_ID,
                                             variable: 'PORTAL_INGEST_TOKEN')]) {
@@ -181,6 +228,17 @@ pipeline {
                                   | tee "$state_root/portal_response.json"
                                 python3 -c 'import json, pathlib, sys, urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("Portal response did not contain a run URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://192.168.100.150", u) + chr(10))' \
                                   "$state_root/portal_response.json" "$state_root/portal_url.txt"
+                                if [[ -f "$run_root/triage/summary.json" ]]; then
+                                  if ! python3 ci/triage/publish_triage.py \
+                                    --run-root "$run_root" \
+                                    --job-name "$JOB_NAME" \
+                                    --build-number "$BUILD_NUMBER" \
+                                    --portal-url 'https://192.168.100.150/portal/' \
+                                    --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
+                                    --output "$state_root/portal_triage_response.json"; then
+                                    echo 'Advisory triage could not be published; certification result is unchanged.' >&2
+                                  fi
+                                fi
                             '''
                         }
                     }

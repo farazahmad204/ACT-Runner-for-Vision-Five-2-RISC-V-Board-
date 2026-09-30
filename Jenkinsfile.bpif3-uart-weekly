@@ -63,11 +63,11 @@ pipeline {
         LOCAL_TOOLS_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/tools'
         LOCAL_TUYA_DEVICES_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/devices.json'
         REGENERATE_TESTS = 'true'
-        SAIL_BIN = '/home/lpt-10xe/riscv-sail-0.14/bin/sail_riscv_sim'
-        SAIL_EXPECTED_VERSION = '0.14'
+        SAIL_BIN = '/home/lpt-10xe/riscv-sail-0.14.1/bin/sail_riscv_sim'
+        SAIL_EXPECTED_VERSION = '0.14.1'
         INSTALLED_RUNNER_BUILD = "${params.INSTALLED_RUNNER_BUILD ?: ''}"
         UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'SCW1050'}"
-        PATH = '/home/lpt-10xe/.local/bin:/home/lpt-10xe/riscv64/bin:/home/lpt-10xe/riscv-sail-0.14/bin:/home/lpt-10xe/.rbenv/shims:/home/lpt-10xe/.rbenv/bin:/usr/local/bin:/usr/bin:/bin'
+        PATH = '/home/lpt-10xe/.local/bin:/home/lpt-10xe/riscv64/bin:/home/lpt-10xe/riscv-sail-0.14.1/bin:/home/lpt-10xe/.rbenv/shims:/home/lpt-10xe/.rbenv/bin:/usr/local/bin:/usr/bin:/bin'
     }
 
     stages {

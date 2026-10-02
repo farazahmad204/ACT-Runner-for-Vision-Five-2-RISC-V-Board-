@@ -18,7 +18,11 @@ static uint64_t read_csr_stvec_local(void)
 
 int is_valid_ddr_addr(uint64_t addr)
 {
-    return (addr >= BOARD_RAM_BASE && addr < BOARD_RAM_LIMIT);
+    if (addr < BOARD_RAM_BASE || addr >= BOARD_RAM_LIMIT) return 0;
+#if BOARD_DDR_EXCLUDE_BASE < BOARD_DDR_EXCLUDE_LIMIT
+    if (addr >= BOARD_DDR_EXCLUDE_BASE && addr < BOARD_DDR_EXCLUDE_LIMIT) return 0;
+#endif
+    return 1;
 }
 
 int is_valid_ddr_range(uint64_t begin, uint64_t end)
@@ -28,6 +32,18 @@ int is_valid_ddr_range(uint64_t begin, uint64_t end)
     if (!is_valid_ddr_addr(begin) || !is_valid_ddr_addr(end - 1)) return 0;
     if ((end - begin) > 0x200000ULL) return 0;
     return 1;
+}
+
+int is_valid_payload_addr(uint64_t addr)
+{
+    return addr >= BOARD_PAYLOAD_BASE && addr < BOARD_PAYLOAD_LIMIT &&
+           is_valid_ddr_addr(addr);
+}
+
+int is_valid_payload_range(uint64_t begin, uint64_t end)
+{
+    if (begin == 0 || end == 0 || end <= begin) return 0;
+    return is_valid_payload_addr(begin) && is_valid_payload_addr(end - 1);
 }
 
 static int ranges_overlap_u64(uint64_t a_begin, uint64_t a_end,
@@ -59,10 +75,35 @@ static volatile uint32_t g_uart_log_lock = 0;
 static volatile uint64_t g_uart_log_owner = ~0ULL;
 static volatile uint32_t g_uart_log_depth = 0;
 
+void platform_uart_init(void)
+{
+#if BOARD_UART_8250_INIT_ENABLE
+    const uint32_t divisor =
+        (BOARD_UART_INPUT_CLOCK_HZ + 8u * BOARD_UART_BAUD) /
+        (16u * BOARD_UART_BAUD);
+
+    /* Match the UART8250 initialization performed by the RockOS OpenSBI
+       stage that this runner replaces. */
+    uart_reg_write(UART_BASE + UART_IER, 0x00u);
+    uart_reg_write(UART_BASE + UART_LCR, 0x80u);
+    if (divisor != 0u) {
+        uart_reg_write(UART_BASE + UART_DLL, divisor & 0xffu);
+        uart_reg_write(UART_BASE + UART_DLM, (divisor >> 8) & 0xffu);
+    }
+    uart_reg_write(UART_BASE + UART_LCR, 0x03u);
+    uart_reg_write(UART_BASE + UART_FCR, 0x01u);
+    uart_reg_write(UART_BASE + UART_MCR, 0x00u);
+    (void)uart_reg_read(UART_BASE + UART_LSR);
+    (void)uart_reg_read(UART_BASE + UART_RBR);
+    uart_reg_write(UART_BASE + UART_SCR, 0x00u);
+    asm volatile ("fence iorw, iorw" ::: "memory");
+#endif
+}
+
 static void uart_putc_raw(char c)
 {
-    while ((mmio_read8(UART_BASE + UART_LSR) & UART_LSR_THRE) == 0) {}
-    mmio_write8(UART_BASE + UART_THR, (uint8_t)c);
+    while ((uart_reg_read(UART_BASE + UART_LSR) & UART_LSR_THRE) == 0) {}
+    uart_reg_write(UART_BASE + UART_THR, (uint8_t)c);
 }
 
 void uart_log_lock(void)
@@ -1667,10 +1708,10 @@ int load_elf_blob(const uint8_t *blob, size_t blob_size, uint64_t *entry_out)
         uint64_t dst_addr = (ph[i].p_paddr ? ph[i].p_paddr : ph[i].p_vaddr);
         uint64_t dst_end;
         if (dst_addr == 0) return -9;
-        if (!is_valid_ddr_addr(dst_addr)) return -10;
+        if (!is_valid_payload_addr(dst_addr)) return -10;
         if (ph[i].p_memsz > UINT64_MAX - dst_addr) return -11;
         dst_end = dst_addr + ph[i].p_memsz;
-        if (ph[i].p_memsz > 0 && !is_valid_ddr_addr(dst_end - 1)) return -11;
+        if (ph[i].p_memsz > 0 && !is_valid_payload_addr(dst_end - 1)) return -11;
         if (ranges_overlap_u64(dst_addr, dst_end,
                                (uint64_t)(uintptr_t)__text_start,
                                (uint64_t)(uintptr_t)__stack_top)) return -13;
@@ -1699,7 +1740,9 @@ int load_elf_blob(const uint8_t *blob, size_t blob_size, uint64_t *entry_out)
         }
     }
 
-    if (g_runner_image.tohost_addr && is_valid_ddr_addr(g_runner_image.tohost_addr)) {
+    if (!is_valid_payload_addr(eh->e_entry)) return -15;
+
+    if (g_runner_image.tohost_addr && is_valid_payload_addr(g_runner_image.tohost_addr)) {
         g_runner_image.tohost_ptr = (volatile uint64_t *)(uintptr_t)g_runner_image.tohost_addr;
     } else {
         g_runner_image.tohost_ptr = 0;

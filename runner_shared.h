@@ -13,6 +13,23 @@
 #ifndef BOARD_UART_REG_IO_WIDTH
 #define BOARD_UART_REG_IO_WIDTH 1
 #endif
+#ifndef BOARD_UART_8250_INIT_ENABLE
+#define BOARD_UART_8250_INIT_ENABLE 0
+#endif
+#ifndef BOARD_UART_INPUT_CLOCK_HZ
+#define BOARD_UART_INPUT_CLOCK_HZ 0u
+#endif
+/* Diagnostic-only: record UART RX activity silently and report it later. */
+#ifndef BOARD_UART_RX_DIAG
+#define BOARD_UART_RX_DIAG 0
+#endif
+/* Boards without a validated PLIC/UART interrupt mapping set this to 0. */
+#ifndef BOARD_EXTERNAL_IRQ_CLEANUP_ENABLE
+#define BOARD_EXTERNAL_IRQ_CLEANUP_ENABLE 1
+#endif
+#ifndef BOARD_UART_BAUD
+#define BOARD_UART_BAUD 115200u
+#endif
 #ifndef BOARD_PLIC_BASE
 #define BOARD_PLIC_BASE 0x0c000000UL
 #endif
@@ -48,6 +65,18 @@
 #endif
 #ifndef BOARD_RAM_LIMIT
 #define BOARD_RAM_LIMIT 0x100000000ULL
+#endif
+#ifndef BOARD_PAYLOAD_BASE
+#define BOARD_PAYLOAD_BASE BOARD_RAM_BASE
+#endif
+#ifndef BOARD_PAYLOAD_LIMIT
+#define BOARD_PAYLOAD_LIMIT BOARD_RAM_LIMIT
+#endif
+#ifndef BOARD_DDR_EXCLUDE_BASE
+#define BOARD_DDR_EXCLUDE_BASE 0ULL
+#endif
+#ifndef BOARD_DDR_EXCLUDE_LIMIT
+#define BOARD_DDR_EXCLUDE_LIMIT 0ULL
 #endif
 #ifndef BOARD_UART_ELF_BUFFER_ADDR
 #define BOARD_UART_ELF_BUFFER_ADDR 0x88000000ULL
@@ -85,6 +114,7 @@
 #define RUNNER_PLATFORM_GENERIC    0
 #define RUNNER_PLATFORM_VF2_JH7110 1
 #define RUNNER_PLATFORM_BPIF3_K1   2
+#define RUNNER_PLATFORM_MILKV_MEGREZ_EIC7700X 3
 #ifndef BOARD_PLATFORM_ID
 #define BOARD_PLATFORM_ID RUNNER_PLATFORM_GENERIC
 #endif
@@ -92,6 +122,8 @@
 #define RUNNER_PLATFORM_NAME "vf2_jh7110"
 #elif BOARD_PLATFORM_ID == RUNNER_PLATFORM_BPIF3_K1
 #define RUNNER_PLATFORM_NAME "bpif3_k1"
+#elif BOARD_PLATFORM_ID == RUNNER_PLATFORM_MILKV_MEGREZ_EIC7700X
+#define RUNNER_PLATFORM_NAME "milkv_megrez_eic7700x"
 #else
 #define RUNNER_PLATFORM_NAME "generic_riscv"
 #endif
@@ -110,8 +142,20 @@
 
 #define UART_THR        0x00
 #define UART_RBR        0x00
+#define UART_DLL        0x00
 #define UART_IER        0x04
+#define UART_DLM        0x04
+#define UART_FCR        0x08
+#define UART_LCR        0x0c
+#define UART_MCR        0x10
 #define UART_LSR        0x14
+#define UART_SCR        0x1c
+#define UART_IIR        0x08
+#define UART_MSR        0x18
+#define UART_DW_USR     0x7c /* Synopsys DesignWare status register */
+#define UART_DW_RFL     0x84 /* DesignWare RX FIFO level, if implemented */
+#define UART_MCR_LOOP   (1u << 4)
+#define UART_LSR_TEMT   (1u << 6)
 #define UART_LSR_DR     (1u << 0)
 #define UART_LSR_THRE   (1u << 5)
 #define UART_IER_THRI   (1u << 1)
@@ -420,6 +464,32 @@ static inline uint16_t mmio_read16(uintptr_t addr) { return *(volatile uint16_t*
 static inline void mmio_write32(uintptr_t addr, uint32_t v) { *(volatile uint32_t*)addr = v; }
 static inline uint32_t mmio_read32(uintptr_t addr) { return *(volatile uint32_t*)addr; }
 
+static inline uint32_t uart_reg_read(uintptr_t addr)
+{
+#if BOARD_UART_REG_IO_WIDTH == 4
+    return mmio_read32(addr);
+#elif BOARD_UART_REG_IO_WIDTH == 2
+    return mmio_read16(addr);
+#elif BOARD_UART_REG_IO_WIDTH == 1
+    return mmio_read8(addr);
+#else
+#error "Unsupported BOARD_UART_REG_IO_WIDTH"
+#endif
+}
+
+static inline void uart_reg_write(uintptr_t addr, uint32_t value)
+{
+#if BOARD_UART_REG_IO_WIDTH == 4
+    mmio_write32(addr, value);
+#elif BOARD_UART_REG_IO_WIDTH == 2
+    mmio_write16(addr, (uint16_t)value);
+#elif BOARD_UART_REG_IO_WIDTH == 1
+    mmio_write8(addr, (uint8_t)value);
+#else
+#error "Unsupported BOARD_UART_REG_IO_WIDTH"
+#endif
+}
+
 static inline uint64_t read_csr_mhartid(void) { uint64_t v; __asm__ volatile ("csrr %0, mhartid" : "=r"(v)); return v; }
 static inline void write_csr_mtvec(uint64_t v) { __asm__ volatile ("csrw mtvec, %0" :: "r"(v)); }
 static inline void write_csr_mscratch(uint64_t v) { __asm__ volatile ("csrw mscratch, %0" :: "r"(v)); }
@@ -616,6 +686,8 @@ enum {
 
 int is_valid_ddr_addr(uint64_t addr);
 int is_valid_ddr_range(uint64_t begin, uint64_t end);
+int is_valid_payload_addr(uint64_t addr);
+int is_valid_payload_range(uint64_t begin, uint64_t end);
 
 void *memcpy_local(void *dst, const void *src, size_t n);
 void *memset_local(void *dst, int c, size_t n);
@@ -623,6 +695,7 @@ void *memcpy(void *dst, const void *src, size_t n);
 void *memset(void *dst, int c, size_t n);
 
 void uart_putc(char c);
+void platform_uart_init(void);
 void uart_puts(const char* s);
 void uart_put_hex(uint64_t x);
 void uart_put_dec_u64(uint64_t v);

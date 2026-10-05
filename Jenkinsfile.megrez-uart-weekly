@@ -1,0 +1,265 @@
+pipeline {
+    agent {
+        node {
+            label 'riscv-hw-agent'
+            customWorkspace '/home/lpt-10xe/jenkins-agent/workspace/megrez-uart-weekly'
+        }
+    }
+
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '8', artifactNumToKeepStr: '8'))
+        timeout(time: 168, unit: 'HOURS')
+        timestamps()
+        skipDefaultCheckout(true)
+    }
+
+    parameters {
+        string(name: 'RUNNER_BRANCH', defaultValue: 'vf2-uart-stream-jenkins',
+            description: 'Runner branch resolved once at checkout.')
+        string(name: 'RUNNER_REVISION_OVERRIDE', defaultValue: '',
+            description: 'Optional exact runner commit.')
+        string(name: 'ACT_REMOTE_URL', defaultValue: 'https://github.com/Arshia2564/riscv-arch-test.git',
+            description: 'ACT repository. TEST_SCOPE=hypervisor needs a repo/branch with the H test suites and the H-enabled Megrez config.')
+        string(name: 'ACT_BRANCH', defaultValue: 'sifive_u74',
+            description: 'ACT branch containing config/cores/milkv_megrez/milkv-megrez-p550. Use megrez-hypervisor for TEST_SCOPE=hypervisor (sifive_u74 has no H suites).')
+        string(name: 'ACT_REVISION_OVERRIDE', defaultValue: '',
+            description: 'Optional exact ACT commit.')
+        choice(name: 'TEST_SCOPE', choices: ['all', 'priv', 'unpriv', 'hypervisor'],
+            description: 'all: every ACT suite; priv: privileged suites; unpriv: non-privileged (rv64i/rv64e/...) suites; hypervisor: H and Sh* privileged suites.')
+        booleanParam(name: 'RUN_SPIKE', defaultValue: true,
+            description: 'Run every Sail-runnable ELF on Spike before Megrez.')
+        booleanParam(name: 'RUN_HARDWARE', defaultValue: true,
+            description: 'Power-cycle Megrez and stream every runnable ELF to its persistent UART runner.')
+        string(name: 'SERIAL_DEV', defaultValue: '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0',
+            description: 'Megrez external USB-TTL adapter on UART0 (USB-C debug port must be unplugged).')
+        string(name: 'POWER_DEVICE_NAME', defaultValue: 'SCW1050',
+            description: 'Megrez smart-outlet name in devices.json (shared with BPI-F3).')
+        string(name: 'INSTALLED_RUNNER_BUILD', defaultValue: '',
+            description: 'Optional override; blank uses ci/runner_inventory.json.')
+        string(name: 'UART_READY_TIMEOUT', defaultValue: '300',
+            description: 'Seconds allowed for each power-cycled Megrez (SPI boot + DDR training) to advertise READY.')
+        string(name: 'UART_RESULT_TIMEOUT', defaultValue: '900',
+            description: 'Seconds allowed for each ELF to finish after transfer.')
+        booleanParam(name: 'PUBLISH_RESULTS', defaultValue: true,
+            description: 'Publish the normalized weekly run to the results portal.')
+        string(name: 'PORTAL_CREDENTIAL_ID', defaultValue: 'riscv-portal-ingest-token',
+            description: 'Jenkins secret-text credential containing the portal ingest token.')
+        booleanParam(name: 'RUN_TRIAGE', defaultValue: true,
+            description: 'Generate deterministic evidence reports for every non-PASS case.')
+        booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: false,
+            description: 'Optionally add advisory AI analysis for failed cases; never changes test verdicts.')
+        string(name: 'AI_TRIAGE_MODEL', defaultValue: 'gpt-5',
+            description: 'Organization-approved OpenAI Responses API model for optional analysis.')
+        string(name: 'AI_TRIAGE_CREDENTIAL_ID', defaultValue: 'openai-api-key',
+            description: 'Jenkins Secret Text credential containing the OpenAI API key.')
+        string(name: 'AI_TRIAGE_MAX_FAILURES', defaultValue: '0',
+            description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
+    }
+
+    environment {
+        RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
+        LOCAL_TOOLS_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/tools'
+        LOCAL_TUYA_DEVICES_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/devices.json'
+        REGENERATE_TESTS = 'true'
+        SAIL_BIN = '/home/lpt-10xe/riscv-sail-0.14.1/bin/sail_riscv_sim'
+        SAIL_EXPECTED_VERSION = '0.14.1'
+        // ESWIN nsign packaging tree for the Megrez boot image (pinned rockos-opensbi checkout).
+        MEGREZ_NSIGN_ROOT = '/home/lpt-10xe/megrez-deps/rockos-opensbi'
+        INSTALLED_RUNNER_BUILD = "${params.INSTALLED_RUNNER_BUILD ?: ''}"
+        UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'SCW1050'}"
+        PATH = '/home/lpt-10xe/.local/bin:/home/lpt-10xe/riscv64/bin:/home/lpt-10xe/riscv-sail-0.14.1/bin:/home/lpt-10xe/.rbenv/shims:/home/lpt-10xe/.rbenv/bin:/usr/local/bin:/usr/bin:/bin'
+    }
+
+    stages {
+        stage('Clean Checkout') {
+            steps {
+                deleteDir()
+                sh '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    runner_branch="${RUNNER_BRANCH:-vf2-uart-stream-jenkins}"
+                    runner_revision_override="${RUNNER_REVISION_OVERRIDE:-}"
+                    git check-ref-format --branch "$runner_branch" >/dev/null
+                    git init .
+                    git remote add origin "$RUNNER_REMOTE_URL"
+                    runner_ref="refs/remotes/origin/$runner_branch"
+                    fetch_ok=false
+                    for attempt in 1 2 3 4; do
+                      echo "Runner fetch attempt ${attempt}/4"
+                      if timeout 180 git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
+                        fetch --force --prune origin "+refs/heads/$runner_branch:$runner_ref"; then
+                        fetch_ok=true
+                        break
+                      fi
+                      [[ "$attempt" -eq 4 ]] || sleep "$((attempt * 15))"
+                    done
+                    [[ "$fetch_ok" == true ]] || { echo "Runner fetch failed: $runner_branch" >&2; exit 1; }
+                    fetched="$(git rev-parse --verify "${runner_ref}^{commit}")"
+                    selected="${runner_revision_override:-$fetched}"
+                    selected="$(git rev-parse --verify "$selected^{commit}")"
+                    git checkout --detach "$selected"
+                    submodule_ok=false
+                    for attempt in 1 2 3 4; do
+                      if timeout 300 git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
+                        submodule update --init external/riscv-arch-test; then
+                        submodule_ok=true
+                        break
+                      fi
+                      [[ "$attempt" -eq 4 ]] || sleep "$((attempt * 15))"
+                    done
+                    [[ "$submodule_ok" == true ]] || { echo 'ACT submodule update failed' >&2; exit 1; }
+                    mkdir -p tools
+                    cp -a "$LOCAL_TOOLS_SOURCE/." tools/
+                    install -m 0600 "$LOCAL_TUYA_DEVICES_SOURCE" devices.json
+                    {
+                      echo "Runner branch: $runner_branch"
+                      echo "Runner SHA:    $selected"
+                      echo "Checkout:      detached"
+                    } | tee .jenkins_runner_resolution.txt
+                    test -x ci/jenkins/uart_weekly_megrez.sh
+                '''
+            }
+        }
+
+        stage('Megrez ACT Preflight') {
+            steps { sh 'TEST_SCOPE="$TEST_SCOPE" ci/jenkins/uart_weekly_megrez.sh preflight' }
+        }
+
+        stage('Generate Selected ACT Scope + Sail') {
+            steps { sh 'TEST_SCOPE="$TEST_SCOPE" ci/jenkins/uart_weekly_megrez.sh prepare' }
+        }
+
+        stage('Spike Reference') {
+            when { expression { return params.RUN_SPIKE } }
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    sh 'TEST_SCOPE="$TEST_SCOPE" ci/jenkins/uart_weekly_megrez.sh spike'
+                }
+            }
+        }
+
+        stage('Build Candidate Megrez UART Runner') {
+            steps { sh 'TEST_SCOPE="$TEST_SCOPE" ci/jenkins/uart_weekly_megrez.sh verify-runner-image' }
+        }
+
+        stage('Megrez UART Execute') {
+            when { expression { return params.RUN_HARDWARE } }
+            steps {
+                // SCW1050 powers the Megrez now. It is also the BPI-F3 outlet and the default
+                // (first devices.json entry) for the VF2 jobs: hold all three board locks.
+                lock(resource: 'vf2-hardware') {
+                lock(resource: 'bpif3-hardware') {
+                lock(resource: 'megrez-hardware') {
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                        sh '''#!/usr/bin/env bash
+                            TEST_SCOPE="$TEST_SCOPE" \
+                            SERIAL_DEV="$SERIAL_DEV" \
+                            UART_READY_TIMEOUT="$UART_READY_TIMEOUT" \
+                            UART_RESULT_TIMEOUT="$UART_RESULT_TIMEOUT" \
+                              ci/jenkins/uart_weekly_megrez.sh run
+                        '''
+                    }
+                }
+                }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'test ! -x ci/jenkins/uart_weekly_megrez.sh || TEST_SCOPE="$TEST_SCOPE" ci/jenkins/uart_weekly_megrez.sh finalize || true'
+            junit testResults: "logs/runs/jenkins_megrez_uart_weekly_${env.BUILD_NUMBER}/junit.xml",
+                  allowEmptyResults: true,
+                  keepLongStdio: true
+            script {
+                if (params.RUN_TRIAGE) {
+                    def triageCommand = '''#!/usr/bin/env bash
+                        set -euo pipefail
+                        run_root="logs/runs/jenkins_megrez_uart_weekly_${BUILD_NUMBER}"
+                        state_root="logs/jenkins/megrez_uart_weekly/jenkins_megrez_uart_weekly_${BUILD_NUMBER}"
+                        test -f "$run_root/cases.json" || {
+                          echo "Triage skipped: $run_root/cases.json is unavailable"
+                          exit 0
+                        }
+                        args=(
+                          --run-root "$run_root"
+                          --state-root "$state_root"
+                          --board milkv_megrez_eic7700x
+                          --model "$AI_TRIAGE_MODEL"
+                          --max-ai-failures "$AI_TRIAGE_MAX_FAILURES"
+                        )
+                        [[ "$RUN_AI_TRIAGE" != true ]] || args+=(--ai)
+                        python3 ci/triage/run_ci_triage.py "${args[@]}"
+                    '''
+                    def triageRc = 0
+                    if (params.RUN_AI_TRIAGE) {
+                        try {
+                            withCredentials([string(credentialsId: params.AI_TRIAGE_CREDENTIAL_ID,
+                                                    variable: 'OPENAI_API_KEY')]) {
+                                triageRc = sh(script: triageCommand, returnStatus: true)
+                            }
+                        } catch (Exception exc) {
+                            triageRc = 1
+                            echo "Optional AI triage could not start: ${exc.getMessage()}"
+                        }
+                    } else {
+                        triageRc = sh(script: triageCommand, returnStatus: true)
+                    }
+                    if (triageRc != 0) {
+                        echo "ACT CI triage failed with rc=${triageRc}; certification result is unchanged."
+                    }
+                }
+                if (params.PUBLISH_RESULTS) {
+                    withCredentials([string(credentialsId: params.PORTAL_CREDENTIAL_ID,
+                                            variable: 'PORTAL_INGEST_TOKEN')]) {
+                        withEnv(["PORTAL_BUILD_STATUS=${currentBuild.currentResult}"]) {
+                            sh '''#!/usr/bin/env bash
+                                set -euo pipefail
+                                state_root="logs/jenkins/megrez_uart_weekly/jenkins_megrez_uart_weekly_${BUILD_NUMBER}"
+                                run_root="logs/runs/jenkins_megrez_uart_weekly_${BUILD_NUMBER}"
+                                python3 /home/lpt-10xe/jenkins-agent/tools/publish_jenkins_results.py \
+                                  --state-root "$state_root" \
+                                  --run-root "$run_root" \
+                                  --board-slug milkv-megrez \
+                                  --board-name 'Milk-V Megrez' \
+                                  --core-profile 'ESWIN EIC7700X/SiFive P550' \
+                                  --job-name "$JOB_NAME" \
+                                  --build-number "$BUILD_NUMBER" \
+                                  --build-url "$BUILD_URL" \
+                                  --status "$PORTAL_BUILD_STATUS" \
+                                  --portal-url 'https://192.168.100.150/portal/' \
+                                  --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
+                                  --artifact-store /home/lpt-10xe/jenkins-agent/results-artifacts \
+                                  --output "$state_root/portal_payload.json" \
+                                  | tee "$state_root/portal_response.json"
+                                python3 -c 'import json, pathlib, sys, urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("Portal response did not contain a run URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://192.168.100.150", u) + chr(10))' \
+                                  "$state_root/portal_response.json" "$state_root/portal_url.txt"
+                                if [[ -f "$run_root/triage/summary.json" ]]; then
+                                  if ! python3 ci/triage/publish_triage.py \
+                                    --run-root "$run_root" \
+                                    --job-name "$JOB_NAME" \
+                                    --build-number "$BUILD_NUMBER" \
+                                    --portal-url 'https://192.168.100.150/portal/' \
+                                    --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
+                                    --output "$state_root/portal_triage_response.json"; then
+                                    echo 'Advisory triage could not be published; certification result is unchanged.' >&2
+                                  fi
+                                fi
+                            '''
+                        }
+                    }
+                    def portalUrlFile = "logs/jenkins/megrez_uart_weekly/jenkins_megrez_uart_weekly_${env.BUILD_NUMBER}/portal_url.txt"
+                    if (fileExists(portalUrlFile)) {
+                        def portalUrl = readFile(portalUrlFile).trim()
+                        currentBuild.description = "${params.TEST_SCOPE}: <a href=\"${portalUrl}\">Megrez portal results</a>"
+                        echo "Portal results: ${portalUrl}"
+                    }
+                }
+            }
+            archiveArtifacts artifacts: "logs/jenkins/megrez_uart_weekly/jenkins_megrez_uart_weekly_${env.BUILD_NUMBER}/**, logs/runs/jenkins_megrez_uart_weekly_${env.BUILD_NUMBER}/**, logs/reference-model-runs/jenkins_megrez_uart_weekly_${env.BUILD_NUMBER}/**, cert_harness/build/milkv_megrez_eic7700x/UART_M_MODE/manifest.json",
+                             allowEmptyArchive: true,
+                             fingerprint: true
+        }
+    }
+}

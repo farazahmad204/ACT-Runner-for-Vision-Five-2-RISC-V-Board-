@@ -22,10 +22,15 @@ test_scope="${ACT_TEST_SCOPE:-priv}"
 case "$test_scope" in
   priv) test_dir="$state_root/all_priv_tests" ;;
   all) test_dir="$state_root/all_tests" ;;
-  *) echo "ACT_TEST_SCOPE must be 'priv' or 'all'." >&2; exit 2 ;;
+  unpriv) test_dir="$state_root/unpriv_tests" ;;
+  hypervisor) test_dir="$state_root/hypervisor_tests" ;;
+  *) echo "ACT_TEST_SCOPE must be 'priv', 'all', 'unpriv' or 'hypervisor'." >&2; exit 2 ;;
 esac
+# hypervisor is the privileged suites that exercise the H extension (H*, *H,
+# *H<suffix>) and the Sh* profile extensions; it is staged like priv.
+hypervisor_suite_regex="${HYPERVISOR_SUITE_REGEX:-^(H|Sh)|H(F|V|Gei|Sm|Zicbo|ZicboSm)?$}"
 act_build_args=()
-if [[ "$test_scope" == "all" ]]; then
+if [[ "$test_scope" == "all" || "$test_scope" == "unpriv" ]]; then
   act_build_args+=(--act-fast)
 fi
 generated_test_root="$state_root/generated_tests"
@@ -55,7 +60,7 @@ sail_json="$act_root/$sail_json_relative"
 act_workdir="${ACT_WORKDIR_NAME:-work-vf2-jenkins-all-priv}"
 dut_name="${ACT_DUT_NAME:-visionfive2-rv64gc}"
 artifact_root="$act_root/$act_workdir/$dut_name/build"
-if [[ "$test_scope" == "priv" ]]; then
+if [[ "$test_scope" == "priv" || "$test_scope" == "hypervisor" ]]; then
   artifact_root="$artifact_root/priv"
 fi
 reference_root="$repo_root/logs/reference-model-runs/$run_id"
@@ -249,6 +254,7 @@ case "$stage" in
       find "$act_root/$act_workdir" -depth -delete
     fi
 
+    generator_exclude=""
     if [[ "$test_scope" == "all" ]]; then
       generator_extensions="all"
     else
@@ -257,7 +263,20 @@ case "$stage" in
         uv run python -c \
           'import testgen.priv as p; get_suites = getattr(p, "get_priv_test_suites", None) or p.get_priv_test_extensions; print(",".join(sorted(get_suites())))'
       )"
-      if [[ -n "$requested_generator_extensions" ]]; then
+      if [[ "$test_scope" == "hypervisor" ]]; then
+        registered_priv_generator_extensions="$(
+          printf '%s\n' "$registered_priv_generator_extensions" | tr ',' '\n' |
+            { grep -E "$hypervisor_suite_regex" || true; } | paste -sd, -
+        )"
+        if [[ -z "$registered_priv_generator_extensions" ]]; then
+          echo "ACT revision registers no hypervisor generators (regex: $hypervisor_suite_regex)." >&2
+          exit 1
+        fi
+      fi
+      if [[ "$test_scope" == "unpriv" ]]; then
+        generator_extensions="all"
+        generator_exclude="$registered_priv_generator_extensions"
+      elif [[ -n "$requested_generator_extensions" ]]; then
         generator_extensions="$requested_generator_extensions"
         IFS=',' read -r -a requested_extensions <<< "$generator_extensions"
         for extension in "${requested_extensions[@]}"; do
@@ -278,7 +297,7 @@ case "$stage" in
       (
         cd "$act_root"
         uv run testgen testplans -o "$generated_test_root" --jobs 0 \
-          --extensions "$generator_extensions" --exclude ''
+          --extensions "$generator_extensions" --exclude "$generator_exclude"
       )
     elif [[ -d "$generated_test_root" ]]; then
       find "$generated_test_root" -depth -delete
@@ -289,9 +308,18 @@ case "$stage" in
       static_priv_suites="$(
         git -C "$act_root" ls-tree -d --name-only HEAD:tests/priv | paste -sd, -
       )"
+    elif [[ "$test_scope" == "hypervisor" && "$include_static_priv_suites" == "true" ]]; then
+      static_priv_suites="$(
+        git -C "$act_root" ls-tree -d --name-only HEAD:tests/priv |
+          { grep -E "$hypervisor_suite_regex" || true; } | paste -sd, -
+      )"
     fi
-    if [[ "$test_scope" == "all" ]]; then
-      printf 'all\n' > "$priv_source_roots"
+    stage_scope="$test_scope"
+    if [[ "$test_scope" == "hypervisor" ]]; then
+      stage_scope="priv"
+    fi
+    if [[ "$test_scope" == "all" || "$test_scope" == "unpriv" ]]; then
+      printf '%s\n' "$test_scope" > "$priv_source_roots"
     else
       {
         printf '%s\n' "$generator_extensions" | tr ',' '\n'
@@ -306,7 +334,7 @@ case "$stage" in
       --repository-root "$act_root" \
       --generated-source "$generated_test_root" \
       --destination "$test_dir" \
-      --scope "$test_scope" \
+      --scope "$stage_scope" \
       --include-top-level "$static_priv_suites" \
       --include-generated-top-level "$generator_extensions"
 

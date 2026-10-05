@@ -1,0 +1,12 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job">
+  <actions/>
+  <description>Milk-V Megrez (ESWIN EIC7700X) UART sanity: focused privileged ACT set generated with the Megrez config, Sail and Spike references, then each ELF streamed to the SPI-installed M-mode runner with a smart-plug power cycle per ELF. Publishes JUnit and portal results.</description>
+  <keepDependencies>false</keepDependencies>
+  <properties/>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>__JENKINSFILE__</script>
+    <sandbox>true</sandbox>
+  </definition>
+  <disabled>false</disabled>
+</flow-definition>

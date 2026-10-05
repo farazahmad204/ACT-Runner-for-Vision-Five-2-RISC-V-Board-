@@ -4,7 +4,8 @@
 Static tests are selected from files tracked by the ACT Git checkout. Generated
 tests are taken from a separate, freshly-created testgen output tree. The
 default remains privileged-only for existing callers; ``--scope all`` stages
-all standard architecture roots as well. This prevents local probes and other
+all standard architecture roots as well, and ``--scope unpriv`` stages only the
+non-privileged roots. This prevents local probes and other
 untracked files under ``tests`` from leaking into Jenkins regressions.
 """
 
@@ -44,7 +45,7 @@ def main() -> int:
         help="Fresh testgen output root containing generated architecture suites",
     )
     parser.add_argument("--destination", type=Path, required=True)
-    parser.add_argument("--scope", choices=("priv", "all"), default="priv")
+    parser.add_argument("--scope", choices=("priv", "all", "unpriv"), default="priv")
     parser.add_argument(
         "--include-top-level",
         default="",
@@ -92,7 +93,7 @@ def main() -> int:
     file_count = 0
     test_count = 0
     tracked_paths: list[bytes] = []
-    if args.scope == "all":
+    if args.scope in ("all", "unpriv"):
         tracked_paths = subprocess.run(
             [
                 "git",
@@ -105,7 +106,7 @@ def main() -> int:
                 "tests/rv32i",
                 "tests/rv64e",
                 "tests/rv64i",
-                "tests/priv",
+                *(["tests/priv"] if args.scope == "all" else []),
             ],
             check=True,
             capture_output=True,
@@ -138,12 +139,13 @@ def main() -> int:
     generated_test_count = 0
     if args.generated_source:
         generated_source = args.generated_source.resolve()
-        if args.scope == "all":
+        if args.scope in ("all", "unpriv"):
+            skipped_roots = {"env"} if args.scope == "all" else {"env", "priv"}
             generated_files = sorted(
                 path
                 for path in generated_source.rglob("*")
                 if path.is_file()
-                and path.relative_to(generated_source).parts[0] != "env"
+                and path.relative_to(generated_source).parts[0] not in skipped_roots
             )
         else:
             generated_priv = generated_source / "priv"

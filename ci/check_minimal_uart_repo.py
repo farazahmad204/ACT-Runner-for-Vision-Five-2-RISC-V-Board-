@@ -12,6 +12,7 @@ ALLOWED_JENKINSFILES = {
     "Jenkinsfile.bpif3-uart-sanity",
     "Jenkinsfile.bpif3-uart-weekly",
     "Jenkinsfile.megrez-uart-sanity",
+    "Jenkinsfile.megrez-uart-weekly",
     "Jenkinsfile.uart-single-elf",
     "Jenkinsfile.uart-triage",
 }

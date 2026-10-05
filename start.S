@@ -63,6 +63,13 @@ _start:
        race divisor/FIFO programming with runner output. */
     call platform_uart_init
 #endif
+#if defined(BOARD_H_STATE_RESET) && BOARD_H_STATE_RESET
+    /* Hypervisor state left by the replaced boot stage reaches the test:
+       Megrez enters with hvip = 0x440 (VSTIP|VSEIP), which shows up as extra
+       mip bits in ACT interrupt tests. Restore the reset value Sail assumes.
+       0x645 = hvip; only boards whose core implements H enable this. */
+    csrw 0x645, zero
+#endif
     /* ---- Release hart2 after BSS init is complete ---- */
     la   t2, g_boot_sync
     li   t3, 1

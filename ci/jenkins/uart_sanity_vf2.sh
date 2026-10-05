@@ -11,7 +11,7 @@ export VF2_RUN_ID_PREFIX="${VF2_RUN_ID_PREFIX:-jenkins_uart_sanity}"
 export ACT_WORKDIR_NAME="${ACT_WORKDIR_NAME:-work-vf2-jenkins-uart-sanity-priv}"
 export PRIV_GENERATOR_EXTENSIONS="${PRIV_GENERATOR_EXTENSIONS-ExceptionsF,ExceptionsS,ExceptionsSm,ExceptionsU,ExceptionsZc}"
 export INCLUDE_STATIC_PRIV_SUITES="${INCLUDE_STATIC_PRIV_SUITES:-false}"
-export EXPECTED_TEST_NAMES="${EXPECTED_TEST_NAMES-ExceptionsF-00,ExceptionsS-00,ExceptionsSm-00,ExceptionsU-00,ExceptionsZc-00}"
+export EXPECTED_TEST_NAMES="${EXPECTED_TEST_NAMES-ExceptionsF-00,ExceptionsS-00,ExceptionsSm-00,ExceptionsSm_medeleg_m-00,ExceptionsSm_medeleg_s-00,ExceptionsSm_medeleg_u-00,ExceptionsU-00,ExceptionsZc-00}"
 
 uart_board="${UART_RUNNER_BOARD:-vf2_jh7110}"
 uart_expected_board="${UART_EXPECT_BOARD:-$uart_board}"

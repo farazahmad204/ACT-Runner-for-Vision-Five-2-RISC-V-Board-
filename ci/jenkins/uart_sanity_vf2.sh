@@ -30,9 +30,8 @@ case "$stage" in
     ;;
 
   verify-runner-image)
-    portal_board="visionfive2"
-    [[ "$uart_board" != "bpif3_k1" ]] || portal_board="bananapi-f3"
-    inventory_build="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["boards"][sys.argv[2]]["installed_build_id"])' "$repo_root/ci/runner_inventory.json" "$portal_board")"
+    # Look the board up by its runner id, so every board in ci/runner_inventory.json works.
+    inventory_build="$(python3 -c 'import json,sys; b=[v for v in json.load(open(sys.argv[1]))["boards"].values() if v["runner_board_id"]==sys.argv[2]]; b or sys.exit("board not in runner_inventory.json: "+sys.argv[2]); print(b[0]["installed_build_id"])' "$repo_root/ci/runner_inventory.json" "$uart_board")"
     expected_build="${INSTALLED_RUNNER_BUILD:-$inventory_build}"
     if [[ ! "$expected_build" =~ ^[0-9A-Za-z._-]{1,63}$ ]]; then
       echo "Invalid runner build ID: $expected_build" >&2

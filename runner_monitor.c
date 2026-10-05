@@ -433,6 +433,10 @@ int wait_for_monitor_report(void)
  */
 void platform_external_irq_cleanup(void)
 {
+#if !BOARD_EXTERNAL_IRQ_CLEANUP_ENABLE
+    /* No validated PLIC context/source mapping on this board. */
+    return;
+#else
     const uint32_t source = UART_PLIC_SOURCE;
     const uint32_t contexts[2] = {
         RUNNER_M_PLIC_CONTEXT,
@@ -458,6 +462,7 @@ void platform_external_irq_cleanup(void)
 
     mmio_write32(PLIC_BASE + ((uintptr_t)source * sizeof(uint32_t)), 0u);
     __asm__ volatile ("fence iorw, iorw" ::: "memory");
+#endif
 }
 
 void monitor_hart_loop(void)

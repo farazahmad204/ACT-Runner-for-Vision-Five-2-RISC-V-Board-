@@ -5,7 +5,7 @@ OBJDUMP ?= riscv64-unknown-elf-objdump
 CFLAGS = -march=rv64imafdc_zicsr_zifencei -mabi=lp64d -mcmodel=medany -Os \
          -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -fno-pic \
          -fno-plt -Wall -Wextra
-LDFLAGS = -T $(LINKER_SCRIPT) -nostdlib
+LDFLAGS = -T $(LINKER_SCRIPT) -nostdlib -Wl,-Map,firmware.map
 
 LINKER_SCRIPT ?= link.ld
 BOARD_CFLAGS ?=
@@ -50,4 +50,4 @@ firmware.dis: firmware.elf
 	$(OBJDUMP) -d $< > $@
 
 clean:
-	rm -f firmware.elf firmware.bin firmware.dis
+	rm -f firmware.elf firmware.bin firmware.dis firmware.map

@@ -10,6 +10,11 @@
       "runner_board_id": "bpif3_k1",
       "installed_build_id": "5924c2a11c9f",
       "source_revision": "5924c2a11c9f6f6d44a6548d8b1cd936eb8c2897"
+    },
+    "milkv-megrez": {
+      "runner_board_id": "milkv_megrez_eic7700x",
+      "installed_build_id": "megrez-uart-v4-20261002",
+      "source_revision": "60c22b93a5447fdc2ea538109144fa39ae530e74"
     }
   }
 }

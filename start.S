@@ -58,6 +58,11 @@ _start:
     addi t0, t0, 8
     j    .Lbss
 .Lbss_done:
+#if defined(BOARD_UART_8250_INIT_ENABLE) && BOARD_UART_8250_INIT_ENABLE
+    /* Initialize the console before releasing the monitor hart so it cannot
+       race divisor/FIFO programming with runner output. */
+    call platform_uart_init
+#endif
     /* ---- Release hart2 after BSS init is complete ---- */
     la   t2, g_boot_sync
     li   t3, 1

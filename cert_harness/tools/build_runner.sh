@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: build_runner.sh --board <vf2_jh7110|bpif3_k1> [options]
+Usage: build_runner.sh --board <board> [options]
 
 Options:
   --out-root <dir>  Artifact root (default: cert_harness/build)
@@ -60,10 +60,14 @@ fi
 board_cflags=()
 for var in \
   BOARD_PLATFORM_ID BOARD_UART_BASE BOARD_UART_SIZE BOARD_UART_REG_IO_WIDTH \
+  BOARD_UART_8250_INIT_ENABLE BOARD_UART_INPUT_CLOCK_HZ BOARD_UART_BAUD \
+  BOARD_UART_RX_DIAG BOARD_EXTERNAL_IRQ_CLEANUP_ENABLE \
   BOARD_PLIC_BASE BOARD_UART_PLIC_SOURCE BOARD_RUNNER_M_PLIC_CONTEXT \
   BOARD_RUNNER_S_PLIC_CONTEXT BOARD_CLINT_MSIP_BASE BOARD_CLINT_MTIMECMP_BASE \
   BOARD_CLINT_MTIME_ADDR BOARD_RUNNER_HART_ID BOARD_MONITOR_HART_ID \
-  BOARD_FIXED_TOHOST_ADDR BOARD_RAM_BASE BOARD_RAM_LIMIT BOARD_UART_ELF_BUFFER_ADDR \
+  BOARD_FIXED_TOHOST_ADDR BOARD_RAM_BASE BOARD_RAM_LIMIT \
+  BOARD_PAYLOAD_BASE BOARD_PAYLOAD_LIMIT \
+  BOARD_DDR_EXCLUDE_BASE BOARD_DDR_EXCLUDE_LIMIT BOARD_UART_ELF_BUFFER_ADDR \
   BOARD_UART_ELF_MAX_BYTES BOARD_TEST_STACK_BYTES BOARD_TRAP_STACK_BYTES \
   BOARD_WDT_ENABLE BOARD_WDT_BASE BOARD_WDT_LOAD BOARD_WDT_CTRL BOARD_WDT_LOCK \
   BOARD_WDT_UNLOCK_KEY BOARD_K1_HART_WAKEUP_ENABLE
@@ -85,14 +89,25 @@ cd "$repo_root"
 make -f Makefile.act clean
 make -f Makefile.act \
   CC="$cc" OBJCOPY="$objcopy" OBJDUMP="$objdump" \
+  LINKER_SCRIPT="${BOARD_LINKER_SCRIPT:-link.ld}" \
   RUNNER_BUILD_ID="$runner_build_id" \
   "BOARD_CFLAGS=${board_cflags[*]}" \
   "BOARD_LDFLAGS=${board_ldflags[*]}"
 
-cp -f firmware.elf firmware.bin firmware.dis "$out_dir/"
+cp -f firmware.elf firmware.bin firmware.dis firmware.map "$out_dir/"
 "$size_bin" "$out_dir/firmware.elf" > "$out_dir/size.txt"
 
-if [[ "$package_image" -eq 1 ]]; then
+if [[ "$package_image" -eq 1 && "${BOARD_PACKAGE_MODE:-}" == "adapter" ]]; then
+  adapter_file="$repo_root/cert_harness/board_adapters/${BOARD_ADAPTER:-$board}.sh"
+  [[ -f "$adapter_file" ]] || { echo "Missing board adapter: $adapter_file" >&2; exit 1; }
+  # shellcheck disable=SC1090
+  source "$adapter_file"
+  declare -F board_package_image >/dev/null || {
+    echo "Adapter does not define board_package_image: $adapter_file" >&2
+    exit 1
+  }
+  board_package_image "$repo_root" "$out_dir/firmware.bin" "$out_dir"
+elif [[ "$package_image" -eq 1 ]]; then
   mkimage -f "$BOARD_FIT_SOURCE" "$out_dir/boot_image.bin"
   if [[ -n "${BOARD_BOOT_IMAGE_PAD_BYTES:-}" ]]; then
     truncate -s "$BOARD_BOOT_IMAGE_PAD_BYTES" "$out_dir/boot_image.bin"
@@ -101,7 +116,7 @@ fi
 
 (
   cd "$out_dir"
-  sha256sum firmware.elf firmware.bin firmware.dis size.txt > sha256sums.txt
+  sha256sum firmware.elf firmware.bin firmware.dis firmware.map size.txt > sha256sums.txt
   [[ ! -f boot_image.bin ]] || sha256sum boot_image.bin >> sha256sums.txt
 )
 

@@ -5,6 +5,8 @@ execute it in M-mode. The same source builds for:
 
 - StarFive VisionFive 2 (`vf2_jh7110`)
 - Banana Pi BPI-F3 (`bpif3_k1`)
+- Milk-V Megrez / ESWIN EIC7700X (`milkv_megrez_eic7700x`); see
+  `cert_harness/boards/milkv_megrez_eic7700x/README.md`
 
 It intentionally excludes SD payload loading, embedded packs, S/U-mode runner
 profiles, Riescue profiles, generated tests, and historical debug artifacts.
@@ -19,6 +21,10 @@ PATH=/home/lpt-10xe/riscv64/bin:$PATH \
 
 PATH=/home/lpt-10xe/riscv64/bin:$PATH \
   bash cert_harness/tools/build_runner.sh --board bpif3_k1
+
+MEGREZ_NSIGN_ROOT=/path/to/rockos-opensbi \
+  PATH=/home/lpt-10xe/riscv64/bin:$PATH \
+  bash cert_harness/tools/build_runner.sh --board milkv_megrez_eic7700x
 ```
 
 Artifacts are written to `cert_harness/build/<board>/UART_M_MODE/`.

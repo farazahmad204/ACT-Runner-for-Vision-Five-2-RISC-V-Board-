@@ -132,7 +132,9 @@ pipeline {
         stage('Megrez UART Execute') {
             when { expression { return params.RUN_HARDWARE } }
             steps {
-                // SCW1050 powers the Megrez now and is the BPI-F3 outlet too: hold both locks.
+                // SCW1050 powers the Megrez now. It is also the BPI-F3 outlet and the default
+                // (first devices.json entry) for the VF2 jobs: hold all three board locks.
+                lock(resource: 'vf2-hardware') {
                 lock(resource: 'bpif3-hardware') {
                 lock(resource: 'megrez-hardware') {
                     catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
@@ -143,6 +145,7 @@ pipeline {
                               ci/jenkins/uart_sanity_megrez.sh run
                         '''
                     }
+                }
                 }
                 }
             }

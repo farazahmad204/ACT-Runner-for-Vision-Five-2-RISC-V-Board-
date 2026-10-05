@@ -19,7 +19,7 @@ pipeline {
             description: 'Runner branch resolved once at checkout.')
         string(name: 'RUNNER_REVISION_OVERRIDE', defaultValue: '',
             description: 'Optional exact runner commit.')
-        string(name: 'ACT_BRANCH', defaultValue: 'milkv-megrez-config',
+        string(name: 'ACT_BRANCH', defaultValue: 'sifive_u74',
             description: 'ACT branch containing the Milk-V Megrez configuration.')
         string(name: 'ACT_REVISION_OVERRIDE', defaultValue: '',
             description: 'Optional exact ACT commit.')

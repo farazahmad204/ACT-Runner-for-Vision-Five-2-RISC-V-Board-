@@ -41,7 +41,7 @@ def main() -> int:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--job-name", required=True)
     parser.add_argument("--build-number", type=int, required=True)
-    parser.add_argument("--portal-url", default="https://192.168.100.150/portal/")
+    parser.add_argument("--portal-url", default="https://apollo/portal/")
     parser.add_argument("--token", default=os.environ.get("PORTAL_INGEST_TOKEN", ""))
     parser.add_argument("--ca-file", type=Path)
     parser.add_argument("--output", type=Path)

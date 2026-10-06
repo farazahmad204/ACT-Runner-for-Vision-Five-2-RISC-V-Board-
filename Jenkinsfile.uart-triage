@@ -128,7 +128,7 @@ pipeline {
                           --run-root input \
                           --job-name "$SOURCE_JOB" \
                           --build-number "$SOURCE_BUILD_NUMBER" \
-                          --portal-url 'https://192.168.100.150/portal/' \
+                          --portal-url 'https://apollo/portal/' \
                           --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
                           --output portal_response.json
                         python3 -c 'import json, pathlib; r=json.loads(pathlib.Path("portal_response.json").read_text()); pathlib.Path("portal_url.txt").write_text("https://192.168.100.150" + r["url"] + "\n")'

@@ -231,7 +231,7 @@ pipeline {
                                   --build-number "$BUILD_NUMBER" \
                                   --build-url "$BUILD_URL" \
                                   --status "$PORTAL_BUILD_STATUS" \
-                                  --portal-url 'https://192.168.100.150/portal/' \
+                                  --portal-url 'https://apollo/portal/' \
                                   --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
                                   --suite-inventory-xlsx /home/lpt-10xe/jenkins-agent/reference/vf2-suite-inventory.xlsx \
                                   --artifact-store /home/lpt-10xe/jenkins-agent/results-artifacts \
@@ -245,7 +245,7 @@ pipeline {
                                     --run-root "$run_root" \
                                     --job-name "$JOB_NAME" \
                                     --build-number "$BUILD_NUMBER" \
-                                    --portal-url 'https://192.168.100.150/portal/' \
+                                    --portal-url 'https://apollo/portal/' \
                                     --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
                                     --output "$state_root/portal_triage_response.json"; then
                                     echo 'Advisory triage could not be published; certification result is unchanged.' >&2

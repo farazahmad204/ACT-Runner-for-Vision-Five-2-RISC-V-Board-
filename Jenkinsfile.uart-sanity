@@ -163,7 +163,7 @@ pipeline {
                                   --build-number "$BUILD_NUMBER" \
                                   --build-url "$BUILD_URL" \
                                   --status "$PORTAL_BUILD_STATUS" \
-                                  --portal-url 'https://192.168.100.150/portal/' \
+                                  --portal-url 'https://apollo/portal/' \
                                   --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
                                   --artifact-store /home/lpt-10xe/jenkins-agent/results-artifacts \
                                   --output "$state_root/portal_payload.json" \

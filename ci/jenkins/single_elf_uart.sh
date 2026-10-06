@@ -12,10 +12,18 @@ board_settings() {
     visionfive2)
       board_id="vf2_jh7110"
       power_device="${POWER_DEVICE_NAME:-SCW1050}"
+      ready_timeout_default=240
       ;;
     bananapi-f3)
       board_id="bpif3_k1"
       power_device="${POWER_DEVICE_NAME:-SCW1050}"
+      ready_timeout_default=240
+      ;;
+    milkv-megrez)
+      # SPI boot + DDR training reaches READY in about 157 s.
+      board_id="milkv_megrez_eic7700x"
+      power_device="${POWER_DEVICE_NAME:-SCW1050}"
+      ready_timeout_default=300
       ;;
     *)
       echo "Unsupported TARGET_BOARD: ${TARGET_BOARD:-unset}" >&2
@@ -30,7 +38,7 @@ prepare() {
   [[ "${SUBMISSION_ID:-}" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo 'Invalid SUBMISSION_ID' >&2; return 2; }
   [[ "${ELF_SHA256:-}" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Invalid ELF_SHA256' >&2; return 2; }
   case "${ELF_DOWNLOAD_URL:-}" in
-    https://192.168.100.150/portal/api/v1/elf/*/download/) ;;
+    https://apollo/portal/api/v1/elf/*/download/ | https://192.168.100.150/portal/api/v1/elf/*/download/) ;;
     *) echo 'ELF_DOWNLOAD_URL is outside the approved portal endpoint' >&2; return 2 ;;
   esac
   [[ "${ELF_DOWNLOAD_URL}" == *"/${SUBMISSION_ID}/download/" ]] || {
@@ -87,7 +95,7 @@ run() {
     --device-name "$power_device" \
     --expect-board "$board_id" \
     --expect-runner-build "$runner_build" \
-    --ready-timeout "${UART_READY_TIMEOUT:-240}" \
+    --ready-timeout "${UART_READY_TIMEOUT:-$ready_timeout_default}" \
     --result-timeout "${UART_RESULT_TIMEOUT:-600}"
 }
 

@@ -17,6 +17,7 @@ from pathlib import Path
 BOARDS = {
     "visionfive2": ("VisionFive 2", "SiFive U74"),
     "bananapi-f3": ("Banana Pi BPI-F3", "SpacemiT K1/X60"),
+    "milkv-megrez": ("Milk-V Megrez", "ESWIN EIC7700X/SiFive P550"),
 }
 
 

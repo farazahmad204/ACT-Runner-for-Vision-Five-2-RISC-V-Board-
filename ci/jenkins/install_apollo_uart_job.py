@@ -83,7 +83,7 @@ def request(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="https://192.168.100.150/")
+    parser.add_argument("--url", default="https://apollo/")
     parser.add_argument("--user", required=True)
     parser.add_argument("--job", choices=sorted(JOB_CONFIGS), default="vf2-uart-sanity")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])

@@ -16,7 +16,7 @@ pipeline {
 
     parameters {
         string(name: 'SUBMISSION_ID', defaultValue: '', description: 'Portal submission UUID.')
-        choice(name: 'TARGET_BOARD', choices: ['visionfive2', 'bananapi-f3'],
+        choice(name: 'TARGET_BOARD', choices: ['visionfive2', 'bananapi-f3', 'milkv-megrez'],
                description: 'Physical board selected on the portal.')
         string(name: 'ELF_DOWNLOAD_URL', defaultValue: '', description: 'Token-protected portal ELF URL.')
         password(name: 'ELF_DOWNLOAD_TOKEN', defaultValue: '', description: 'Per-submission ELF token.')
@@ -27,14 +27,16 @@ pipeline {
         string(name: 'RUNNER_REVISION_OVERRIDE', defaultValue: '',
                description: 'Optional exact runner commit for reproducible reruns.')
         string(name: 'SERIAL_DEV', defaultValue: '/dev/ttyUSB0', description: 'USB-UART device.')
-        string(name: 'UART_READY_TIMEOUT', defaultValue: '240', description: 'Runner READY timeout.')
+        string(name: 'UART_READY_TIMEOUT', defaultValue: '',
+               description: 'Runner READY timeout in seconds; blank uses the board default (240, Megrez 300).')
         string(name: 'UART_RESULT_TIMEOUT', defaultValue: '600', description: 'ELF completion timeout.')
     }
 
     environment {
         RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
         LOCAL_TUYA_DEVICES_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/devices.json'
-        PORTAL_URL = 'https://192.168.100.150/portal/'
+        // Agent-to-portal traffic uses the certificate name; /etc/hosts maps apollo on the agent.
+        PORTAL_URL = 'https://apollo/portal/'
         INTERNAL_CA_FILE = '/home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt'
         PATH = '/home/lpt-10xe/.local/bin:/usr/local/bin:/usr/bin:/bin'
     }
@@ -80,12 +82,23 @@ pipeline {
         stage('UART Execute') {
             steps {
                 script {
-                    def hardwareLock = params.TARGET_BOARD == 'bananapi-f3' ?
-                        'bpif3-hardware' : 'vf2-hardware'
-                    lock(resource: hardwareLock) {
+                    def execute = {
                         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                             sh 'ci/jenkins/single_elf_uart.sh run'
                         }
+                    }
+                    if (params.TARGET_BOARD == 'milkv-megrez') {
+                        // SCW1050 powers the Megrez and is also the BPI-F3 and VF2 outlet:
+                        // hold all three board locks, like the Megrez sanity and weekly jobs.
+                        lock(resource: 'vf2-hardware') {
+                            lock(resource: 'bpif3-hardware') {
+                                lock(resource: 'megrez-hardware') { execute() }
+                            }
+                        }
+                    } else {
+                        def hardwareLock = params.TARGET_BOARD == 'bananapi-f3' ?
+                            'bpif3-hardware' : 'vf2-hardware'
+                        lock(resource: hardwareLock) { execute() }
                     }
                 }
             }

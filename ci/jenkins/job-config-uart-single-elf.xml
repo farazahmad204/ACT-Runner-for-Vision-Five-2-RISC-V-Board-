@@ -7,7 +7,7 @@
     <hudson.model.ParametersDefinitionProperty>
       <parameterDefinitions>
         <hudson.model.StringParameterDefinition><name>SUBMISSION_ID</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
-        <hudson.model.ChoiceParameterDefinition><name>TARGET_BOARD</name><choices class="java.util.Arrays$ArrayList"><a class="string-array"><string>visionfive2</string><string>bananapi-f3</string></a></choices></hudson.model.ChoiceParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition><name>TARGET_BOARD</name><choices class="java.util.Arrays$ArrayList"><a class="string-array"><string>visionfive2</string><string>bananapi-f3</string><string>milkv-megrez</string></a></choices></hudson.model.ChoiceParameterDefinition>
         <hudson.model.StringParameterDefinition><name>ELF_DOWNLOAD_URL</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
         <hudson.model.PasswordParameterDefinition><name>ELF_DOWNLOAD_TOKEN</name><defaultValue></defaultValue></hudson.model.PasswordParameterDefinition>
         <hudson.model.StringParameterDefinition><name>ELF_SHA256</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
@@ -15,7 +15,7 @@
         <hudson.model.StringParameterDefinition><name>RUNNER_BRANCH</name><defaultValue>vf2-uart-stream-jenkins</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition><name>RUNNER_REVISION_OVERRIDE</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition><name>SERIAL_DEV</name><defaultValue>/dev/ttyUSB0</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition><name>UART_READY_TIMEOUT</name><defaultValue>240</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition><name>UART_READY_TIMEOUT</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition><name>UART_RESULT_TIMEOUT</name><defaultValue>600</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
       </parameterDefinitions>
     </hudson.model.ParametersDefinitionProperty>

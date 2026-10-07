@@ -1,0 +1,65 @@
+pipeline {
+    agent {
+        node {
+            label 'riscv-hw-agent'
+            customWorkspace '/data/ci/agent/workspace/riscv-board-health'
+        }
+    }
+
+    // Read-only: checks each board's USB-UART device and smart-plug reachability for the
+    // portal's Run ELF page. Takes no board lock and never switches a plug.
+    triggers { cron('H/10 * * * *') }
+
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        timeout(time: 5, unit: 'MINUTES')
+        timestamps()
+        skipDefaultCheckout(true)
+    }
+
+    parameters {
+        string(name: 'RUNNER_BRANCH', defaultValue: 'vf2-uart-stream-jenkins',
+               description: 'Runner repository branch.')
+    }
+
+    environment {
+        RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
+        // Agent-to-portal traffic uses the certificate name; /etc/hosts maps apollo on the agent.
+        PORTAL_URL = 'https://apollo/portal/'
+        INTERNAL_CA_FILE = '/data/ci/agent/jenkins-internal-ca.crt'
+        PATH = '/data/ci/bin:/usr/local/bin:/usr/bin:/bin'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                deleteDir()
+                sh '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    branch="${RUNNER_BRANCH:-vf2-uart-stream-jenkins}"
+                    git check-ref-format --branch "$branch" >/dev/null
+                    git init -q .
+                    git remote add origin "$RUNNER_REMOTE_URL"
+                    timeout 120 git fetch -q --depth 1 origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+                    git checkout -q --detach "origin/$branch"
+                '''
+            }
+        }
+
+        stage('Report Board Health') {
+            steps {
+                withCredentials([string(credentialsId: 'riscv-portal-ingest-token',
+                                        variable: 'PORTAL_INGEST_TOKEN')]) {
+                    sh '''#!/usr/bin/env bash
+                        set -euo pipefail
+                        python3 ci/jenkins/board_health.py \
+                          --devices /data/ci/devices.json \
+                          --portal-url "$PORTAL_URL" \
+                          --ca-file "$INTERNAL_CA_FILE"
+                    '''
+                }
+            }
+        }
+    }
+}

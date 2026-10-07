@@ -13,6 +13,13 @@ installed runner build, serialize access with a board-specific lock, power
 cycle through the configured smart outlet, and publish results to the portal.
 No Jenkins job writes boot media or builds an SD payload pack.
 
+`riscv-board-health` runs every 10 minutes and tells the portal's Run ELF page
+which boards are online: a board is online when its `/dev/ttyCI-<board>`
+USB-UART is present and its smart plug answers a read-only status query
+(`ci/jenkins/board_health.py`; boards without a plug report offline). It takes
+no board lock and never switches a plug. Preview without posting:
+`python3 ci/jenkins/board_health.py --dry-run`.
+
 Installed firmware revisions are tracked in `ci/runner_inventory.json`.
 Override `RUNNER_REVISION_OVERRIDE` only for an intentional reproducible build;
 override `INSTALLED_RUNNER_BUILD` only while diagnosing inventory drift.

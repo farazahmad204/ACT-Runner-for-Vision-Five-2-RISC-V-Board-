@@ -16,14 +16,14 @@ the runner itself always enters the ELF in M-mode.
 ## Build
 
 ```bash
-PATH=/home/lpt-10xe/riscv64/bin:$PATH \
+PATH=/data/ci/toolchains/riscv64/bin:$PATH \
   bash cert_harness/tools/build_runner.sh --board vf2_jh7110
 
-PATH=/home/lpt-10xe/riscv64/bin:$PATH \
+PATH=/data/ci/toolchains/riscv64/bin:$PATH \
   bash cert_harness/tools/build_runner.sh --board bpif3_k1
 
 MEGREZ_NSIGN_ROOT=/path/to/rockos-opensbi \
-  PATH=/home/lpt-10xe/riscv64/bin:$PATH \
+  PATH=/data/ci/toolchains/riscv64/bin:$PATH \
   bash cert_harness/tools/build_runner.sh --board milkv_megrez_eic7700x
 ```
 

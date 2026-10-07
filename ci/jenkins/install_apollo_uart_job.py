@@ -88,7 +88,7 @@ def main() -> int:
     parser.add_argument("--job", choices=sorted(JOB_CONFIGS), default="vf2-uart-sanity")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument(
-        "--ca-file", type=Path, default=Path("/home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt")
+        "--ca-file", type=Path, default=Path("/data/ci/agent/jenkins-internal-ca.crt")
     )
     args = parser.parse_args()
 

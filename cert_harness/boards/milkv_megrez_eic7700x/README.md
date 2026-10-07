@@ -45,7 +45,7 @@ any external adapter's TX disconnected. The by-id name is generic; prefer a
 ```bash
 MEGREZ_NSIGN_ROOT=/path/to/rockos-opensbi@7afdf031 \
 RUNNER_BUILD_ID_OVERRIDE=<build-id> \
-PATH=/home/lpt-10xe/riscv64/bin:$PATH \
+PATH=/data/ci/toolchains/riscv64/bin:$PATH \
   bash cert_harness/tools/build_runner.sh --board milkv_megrez_eic7700x
 ```
 

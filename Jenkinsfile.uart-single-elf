@@ -2,7 +2,7 @@ pipeline {
     agent {
         node {
             label 'riscv-hw-agent'
-            customWorkspace '/home/lpt-10xe/jenkins-agent/workspace/riscv-uart-single-elf'
+            customWorkspace '/data/ci/agent/workspace/riscv-uart-single-elf'
         }
     }
 
@@ -26,7 +26,8 @@ pipeline {
                description: 'Runner repository branch.')
         string(name: 'RUNNER_REVISION_OVERRIDE', defaultValue: '',
                description: 'Optional exact runner commit for reproducible reruns.')
-        string(name: 'SERIAL_DEV', defaultValue: '/dev/ttyUSB0', description: 'USB-UART device.')
+        string(name: 'SERIAL_DEV', defaultValue: '',
+               description: 'USB-UART device; blank uses the board\'s /dev/ttyCI-<board> name.')
         string(name: 'UART_READY_TIMEOUT', defaultValue: '',
                description: 'Runner READY timeout in seconds; blank uses the board default (240, Megrez 300).')
         string(name: 'UART_RESULT_TIMEOUT', defaultValue: '600', description: 'ELF completion timeout.')
@@ -34,11 +35,11 @@ pipeline {
 
     environment {
         RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
-        LOCAL_TUYA_DEVICES_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/devices.json'
+        LOCAL_TUYA_DEVICES_SOURCE = '/data/ci/devices.json'
         // Agent-to-portal traffic uses the certificate name; /etc/hosts maps apollo on the agent.
         PORTAL_URL = 'https://apollo/portal/'
-        INTERNAL_CA_FILE = '/home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt'
-        PATH = '/home/lpt-10xe/.local/bin:/usr/local/bin:/usr/bin:/bin'
+        INTERNAL_CA_FILE = '/data/ci/agent/jenkins-internal-ca.crt'
+        PATH = '/data/ci/bin:/usr/local/bin:/usr/bin:/bin'
     }
 
     stages {

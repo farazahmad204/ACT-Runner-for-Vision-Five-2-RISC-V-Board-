@@ -2,7 +2,7 @@ pipeline {
     agent {
         node {
             label 'riscv-hw-agent'
-            customWorkspace '/home/lpt-10xe/jenkins-agent/workspace/megrez-uart-sanity'
+            customWorkspace '/data/ci/agent/workspace/megrez-uart-sanity'
         }
     }
 
@@ -27,7 +27,7 @@ pipeline {
             description: 'Run the generated ELFs on Spike before Megrez.')
         booleanParam(name: 'RUN_HARDWARE', defaultValue: true,
             description: 'Power-cycle Megrez and stream the focused sanity ELF set over UART.')
-        string(name: 'SERIAL_DEV', defaultValue: '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0',
+        string(name: 'SERIAL_DEV', defaultValue: '/dev/ttyCI-megrez',
             description: 'Megrez external USB-TTL adapter on UART0 (USB-C debug port must be unplugged).')
         string(name: 'POWER_DEVICE_NAME', defaultValue: 'SCW1050',
             description: 'Megrez smart-outlet name in devices.json (shared with BPI-F3).')
@@ -46,16 +46,16 @@ pipeline {
     environment {
         RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
         ACT_REMOTE_URL = 'https://github.com/Arshia2564/riscv-arch-test.git'
-        LOCAL_TOOLS_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/tools'
-        LOCAL_TUYA_DEVICES_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/devices.json'
+        LOCAL_TOOLS_SOURCE = '/data/ci/tools'
+        LOCAL_TUYA_DEVICES_SOURCE = '/data/ci/devices.json'
         REGENERATE_TESTS = 'true'
-        SAIL_BIN = '/home/lpt-10xe/riscv-sail-0.14.1/bin/sail_riscv_sim'
+        SAIL_BIN = '/data/ci/toolchains/riscv-sail-0.14.1/bin/sail_riscv_sim'
         SAIL_EXPECTED_VERSION = '0.14.1'
         INSTALLED_RUNNER_BUILD = "${params.INSTALLED_RUNNER_BUILD ?: ''}"
         UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'SCW1050'}"
         // ESWIN nsign packaging tree for the Megrez boot image (pinned rockos-opensbi checkout).
-        MEGREZ_NSIGN_ROOT = '/home/lpt-10xe/megrez-deps/rockos-opensbi'
-        PATH = '/home/lpt-10xe/.local/bin:/home/lpt-10xe/riscv64/bin:/home/lpt-10xe/riscv-sail-0.14.1/bin:/home/lpt-10xe/.rbenv/shims:/home/lpt-10xe/.rbenv/bin:/usr/local/bin:/usr/bin:/bin'
+        MEGREZ_NSIGN_ROOT = '/data/ci/megrez-deps/rockos-opensbi'
+        PATH = '/data/ci/bin:/data/ci/toolchains/riscv64/bin:/data/ci/toolchains/riscv-sail-0.14.1/bin:/usr/local/bin:/usr/bin:/bin'
     }
 
     stages {
@@ -167,7 +167,7 @@ pipeline {
                                 set -euo pipefail
                                 state_root="logs/jenkins/megrez_uart_sanity/jenkins_megrez_uart_sanity_${BUILD_NUMBER}"
                                 run_root="logs/runs/jenkins_megrez_uart_sanity_${BUILD_NUMBER}"
-                                python3 /home/lpt-10xe/jenkins-agent/tools/publish_jenkins_results.py \
+                                python3 /data/ci/agent/tools/publish_jenkins_results.py \
                                   --state-root "$state_root" \
                                   --run-root "$run_root" \
                                   --board-slug milkv-megrez \
@@ -178,8 +178,8 @@ pipeline {
                                   --build-url "$BUILD_URL" \
                                   --status "$PORTAL_BUILD_STATUS" \
                                   --portal-url 'https://apollo/portal/' \
-                                  --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
-                                  --artifact-store /home/lpt-10xe/jenkins-agent/results-artifacts \
+                                  --ca-file /data/ci/agent/jenkins-internal-ca.crt \
+                                  --artifact-store /data/ci/agent/results-artifacts \
                                   --output "$state_root/portal_payload.json" \
                                   | tee "$state_root/portal_response.json"
                                 python3 -c 'import json, pathlib, sys, urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("Portal response did not contain a run URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://192.168.100.150", u) + chr(10))' \

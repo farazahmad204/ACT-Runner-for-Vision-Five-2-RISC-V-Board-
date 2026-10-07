@@ -5,23 +5,26 @@ action="${1:-}"
 state_root="logs/jenkins/single_elf/${BUILD_NUMBER:?BUILD_NUMBER is required}"
 run_root="logs/runs/jenkins_single_elf_${BUILD_NUMBER}"
 payload="$state_root/payload.elf"
-ca_file="${JENKINS_INTERNAL_CA_FILE:-/home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt}"
+ca_file="${JENKINS_INTERNAL_CA_FILE:-/data/ci/agent/jenkins-internal-ca.crt}"
 
 board_settings() {
   case "${TARGET_BOARD:-}" in
     visionfive2)
       board_id="vf2_jh7110"
+      serial_default=/dev/ttyCI-vf2
       power_device="${POWER_DEVICE_NAME:-SCW1050}"
       ready_timeout_default=240
       ;;
     bananapi-f3)
       board_id="bpif3_k1"
+      serial_default=/dev/ttyCI-bpif3
       power_device="${POWER_DEVICE_NAME:-SCW1050}"
       ready_timeout_default=240
       ;;
     milkv-megrez)
       # SPI boot + DDR training reaches READY in about 157 s.
       board_id="milkv_megrez_eic7700x"
+      serial_default=/dev/ttyCI-megrez
       power_device="${POWER_DEVICE_NAME:-SCW1050}"
       ready_timeout_default=300
       ;;
@@ -88,7 +91,7 @@ run() {
   board_settings
   [[ -r "$payload" ]] || { echo "Prepared ELF is missing: $payload" >&2; return 2; }
   python3 cert_harness/uart_stream/run_elf_batch.py "$payload" \
-    --serial-dev "${SERIAL_DEV:-/dev/ttyUSB0}" \
+    --serial-dev "${SERIAL_DEV:-$serial_default}" \
     --baud 115200 \
     --run-dir "$run_root" \
     --tuya-config devices.json \

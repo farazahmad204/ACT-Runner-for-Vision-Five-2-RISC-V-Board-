@@ -134,7 +134,7 @@ pipeline {
                               --git-revision "$(git rev-parse HEAD 2>/dev/null || true)" \
                               --output "$state_root/portal_payload.json" \
                               | tee "$state_root/portal_response.json"
-                            python3 -c 'import json,pathlib,sys,urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("missing portal URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://192.168.100.150",u)+"\\n")' \
+                            python3 -c 'import json,pathlib,sys,urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("missing portal URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://192.168.100.61",u)+"\\n")' \
                               "$state_root/portal_response.json" "$state_root/portal_url.txt"
                         '''
                     }

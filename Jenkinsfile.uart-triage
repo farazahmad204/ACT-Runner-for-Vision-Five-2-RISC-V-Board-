@@ -2,7 +2,7 @@ pipeline {
     agent {
         node {
             label 'riscv-hw-agent'
-            customWorkspace '/home/lpt-10xe/jenkins-agent/workspace/riscv-uart-triage'
+            customWorkspace '/data/ci/agent/workspace/riscv-uart-triage'
         }
     }
 
@@ -39,7 +39,7 @@ pipeline {
 
     environment {
         RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
-        ARTIFACT_STORE = '/home/lpt-10xe/jenkins-agent/results-artifacts'
+        ARTIFACT_STORE = '/data/ci/agent/results-artifacts'
         PATH = '/usr/local/bin:/usr/bin:/bin'
     }
 
@@ -129,7 +129,7 @@ pipeline {
                           --job-name "$SOURCE_JOB" \
                           --build-number "$SOURCE_BUILD_NUMBER" \
                           --portal-url 'https://apollo/portal/' \
-                          --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
+                          --ca-file /data/ci/agent/jenkins-internal-ca.crt \
                           --output portal_response.json
                         python3 -c 'import json, pathlib; r=json.loads(pathlib.Path("portal_response.json").read_text()); pathlib.Path("portal_url.txt").write_text("https://192.168.100.150" + r["url"] + "\n")'
                     '''

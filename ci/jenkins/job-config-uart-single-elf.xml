@@ -14,7 +14,7 @@
         <hudson.model.StringParameterDefinition><name>ELF_NAME</name><defaultValue>uploaded.elf</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition><name>RUNNER_BRANCH</name><defaultValue>vf2-uart-stream-jenkins</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition><name>RUNNER_REVISION_OVERRIDE</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition><name>SERIAL_DEV</name><defaultValue>/dev/ttyUSB0</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition><name>SERIAL_DEV</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition><name>UART_READY_TIMEOUT</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition><name>UART_RESULT_TIMEOUT</name><defaultValue>600</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
       </parameterDefinitions>

@@ -2,7 +2,7 @@ pipeline {
     agent {
         node {
             label 'riscv-hw-agent'
-            customWorkspace '/home/lpt-10xe/jenkins-agent/workspace/vf2-uart-weekly'
+            customWorkspace '/data/ci/agent/workspace/vf2-uart-weekly'
         }
     }
 
@@ -33,7 +33,7 @@ pipeline {
             description: 'Run every Sail-runnable ELF on Spike before VF2.')
         booleanParam(name: 'RUN_HARDWARE', defaultValue: true,
             description: 'Stream every Sail-runnable ELF to the persistent VF2 runner.')
-        string(name: 'SERIAL_DEV', defaultValue: '/dev/ttyUSB0',
+        string(name: 'SERIAL_DEV', defaultValue: '/dev/ttyCI-vf2',
             description: 'VF2 USB-UART device path.')
         string(name: 'INSTALLED_RUNNER_BUILD', defaultValue: '',
             description: 'Optional override; blank uses ci/runner_inventory.json.')
@@ -60,13 +60,13 @@ pipeline {
     environment {
         RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
         ACT_REMOTE_URL = 'https://github.com/Arshia2564/riscv-arch-test.git'
-        LOCAL_TOOLS_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/tools'
-        LOCAL_TUYA_DEVICES_SOURCE = '/home/lpt-10xe/vf2_mmode_fw_Final_version_Verified/devices.json'
+        LOCAL_TOOLS_SOURCE = '/data/ci/tools'
+        LOCAL_TUYA_DEVICES_SOURCE = '/data/ci/devices.json'
         REGENERATE_TESTS = 'true'
-        SAIL_BIN = '/home/lpt-10xe/riscv-sail-0.14.1/bin/sail_riscv_sim'
+        SAIL_BIN = '/data/ci/toolchains/riscv-sail-0.14.1/bin/sail_riscv_sim'
         SAIL_EXPECTED_VERSION = '0.14.1'
         INSTALLED_RUNNER_BUILD = "${params.INSTALLED_RUNNER_BUILD ?: ''}"
-        PATH = '/home/lpt-10xe/.local/bin:/home/lpt-10xe/riscv64/bin:/home/lpt-10xe/riscv-sail-0.14.1/bin:/home/lpt-10xe/.rbenv/shims:/home/lpt-10xe/.rbenv/bin:/usr/local/bin:/usr/bin:/bin'
+        PATH = '/data/ci/bin:/data/ci/toolchains/riscv64/bin:/data/ci/toolchains/riscv-sail-0.14.1/bin:/usr/local/bin:/usr/bin:/bin'
     }
 
     stages {
@@ -221,7 +221,7 @@ pipeline {
                                 set -euo pipefail
                                 state_root="logs/jenkins/uart_weekly/jenkins_uart_weekly_${BUILD_NUMBER}"
                                 run_root="logs/runs/jenkins_uart_weekly_${BUILD_NUMBER}"
-                                python3 /home/lpt-10xe/jenkins-agent/tools/publish_jenkins_results.py \
+                                python3 /data/ci/agent/tools/publish_jenkins_results.py \
                                   --state-root "$state_root" \
                                   --run-root "$run_root" \
                                   --board-slug visionfive2 \
@@ -232,9 +232,9 @@ pipeline {
                                   --build-url "$BUILD_URL" \
                                   --status "$PORTAL_BUILD_STATUS" \
                                   --portal-url 'https://apollo/portal/' \
-                                  --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
-                                  --suite-inventory-xlsx /home/lpt-10xe/jenkins-agent/reference/vf2-suite-inventory.xlsx \
-                                  --artifact-store /home/lpt-10xe/jenkins-agent/results-artifacts \
+                                  --ca-file /data/ci/agent/jenkins-internal-ca.crt \
+                                  --suite-inventory-xlsx /data/ci/agent/reference/vf2-suite-inventory.xlsx \
+                                  --artifact-store /data/ci/agent/results-artifacts \
                                   --output "$state_root/portal_payload.json" \
                                   | tee "$state_root/portal_response.json"
                                 python3 -c 'import json, pathlib, sys, urllib.parse; response=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")); relative_url=response.get("url"); relative_url or sys.exit("Portal response did not contain a run URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://192.168.100.150", relative_url) + chr(10), encoding="utf-8")' \
@@ -246,7 +246,7 @@ pipeline {
                                     --job-name "$JOB_NAME" \
                                     --build-number "$BUILD_NUMBER" \
                                     --portal-url 'https://apollo/portal/' \
-                                    --ca-file /home/lpt-10xe/jenkins-agent/jenkins-internal-ca.crt \
+                                    --ca-file /data/ci/agent/jenkins-internal-ca.crt \
                                     --output "$state_root/portal_triage_response.json"; then
                                     echo 'Advisory triage could not be published; certification result is unchanged.' >&2
                                   fi

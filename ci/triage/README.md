@@ -58,7 +58,7 @@ explicitly treated as untrusted data, and input is bounded before submission.
 
 Install the `riscv-uart-triage` Jenkins job and select the source weekly job and
 build number. It copies the retained `cases.json` and per-case UART logs from
-`/home/lpt-10xe/jenkins-agent/results-artifacts`, then performs deterministic
+`/data/ci/agent/results-artifacts`, then performs deterministic
 triage with optional AI. It does not reserve, reset, or execute either board.
 When `PUBLISH_TO_PORTAL` is enabled, the job updates only the advisory triage
 fields on the existing portal run; hardware and reference-model verdicts are

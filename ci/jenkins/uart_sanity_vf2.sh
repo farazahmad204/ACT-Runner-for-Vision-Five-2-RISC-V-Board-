@@ -38,7 +38,7 @@ case "$stage" in
       exit 2
     fi
     image="$repo_root/cert_harness/build/$uart_board/UART_M_MODE/boot_image.bin"
-    PATH="/home/lpt-10xe/riscv64/bin:$PATH" \
+    PATH="/data/ci/toolchains/riscv64/bin:$PATH" \
       bash "$repo_root/cert_harness/tools/build_runner.sh" --board "$uart_board"
     test -f "$image"
     mkdir -p "$state_root"
@@ -56,7 +56,7 @@ case "$stage" in
       exit 1
     fi
     expected_build="$(tr -d '[:space:]' < "$state_root/expected_runner_build.txt")"
-    serial_dev="${SERIAL_DEV:-/dev/ttyUSB0}"
+    serial_dev="${SERIAL_DEV:-/dev/ttyCI-vf2}"
     batch_args=(
       "${elfs[@]}"
       --serial-dev "$serial_dev"

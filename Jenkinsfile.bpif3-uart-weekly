@@ -226,7 +226,7 @@ pipeline {
                                   --artifact-store /data/ci/agent/results-artifacts \
                                   --output "$state_root/portal_payload.json" \
                                   | tee "$state_root/portal_response.json"
-                                python3 -c 'import json, pathlib, sys, urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("Portal response did not contain a run URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://192.168.100.61", u) + chr(10))' \
+                                python3 -c 'import json, pathlib, sys, urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("Portal response did not contain a run URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://110.93.227.10:9123", u) + chr(10))' \
                                   "$state_root/portal_response.json" "$state_root/portal_url.txt"
                                 if [[ -f "$run_root/triage/summary.json" ]]; then
                                   if ! python3 ci/triage/publish_triage.py \

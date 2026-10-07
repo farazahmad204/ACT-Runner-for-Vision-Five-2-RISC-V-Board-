@@ -15,6 +15,7 @@ ALLOWED_JENKINSFILES = {
     "Jenkinsfile.megrez-uart-weekly",
     "Jenkinsfile.uart-single-elf",
     "Jenkinsfile.uart-triage",
+    "Jenkinsfile.board-health",
 }
 FORBIDDEN_PATHS = {
     "runner_sd.c",

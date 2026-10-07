@@ -50,6 +50,10 @@ JOB_CONFIGS = {
         "Jenkinsfile.uart-triage",
         "ci/jenkins/job-config-uart-triage.xml",
     ),
+    "riscv-board-health": (
+        "Jenkinsfile.board-health",
+        "ci/jenkins/job-config-board-health.xml",
+    ),
 }
 
 

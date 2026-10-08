@@ -13,6 +13,7 @@ ALLOWED_JENKINSFILES = {
     "Jenkinsfile.bpif3-uart-weekly",
     "Jenkinsfile.megrez-uart-sanity",
     "Jenkinsfile.megrez-uart-weekly",
+    "Jenkinsfile.megrez-damo-uart-weekly",
     "Jenkinsfile.uart-single-elf",
     "Jenkinsfile.uart-triage",
     "Jenkinsfile.board-health",

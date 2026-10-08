@@ -1,0 +1,210 @@
+pipeline {
+    agent {
+        node {
+            label 'riscv-hw-agent'
+            customWorkspace '/data/ci/agent/workspace/megrez-damo-uart-weekly'
+        }
+    }
+
+    // damo-rv-priv-ats (XUANTIE-RV) privileged/hypervisor suites on the Milk-V Megrez.
+    // Self-checking bare-metal C suites, one ELF per suite; no reference model.
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+        timeout(time: 8, unit: 'HOURS')
+        timestamps()
+        skipDefaultCheckout(true)
+    }
+
+    parameters {
+        string(name: 'RUNNER_BRANCH', defaultValue: 'vf2-uart-stream-jenkins',
+            description: 'Runner branch resolved once at checkout.')
+        string(name: 'RUNNER_REVISION_OVERRIDE', defaultValue: '',
+            description: 'Optional exact runner commit.')
+        string(name: 'DAMO_REMOTE_URL', defaultValue: 'https://github.com/farazahmad204/damo-rv-priv-ats.git',
+            description: 'damo-rv-priv-ats repository with config/milkv-megrez-p550.')
+        string(name: 'DAMO_BRANCH', defaultValue: 'main',
+            description: 'damo-rv-priv-ats branch (use megrez-p550 until that PR is merged).')
+        string(name: 'DAMO_REVISION_OVERRIDE', defaultValue: '',
+            description: 'Optional exact damo-rv-priv-ats commit.')
+        string(name: 'DAMO_SUITES', defaultValue: 'Hypervisor_CSR,Hypervisor_Exceptions,Hypervisor_Interrupts,Hypervisor_PMP,Hypervisor_Zaamo,Hypervisor_Zalrsc,Hypervisor_Zca,Hypervisor_Zicntr,Hypervisor_Zihpm,Hypervisor_Sscofpmf,Sv39x4,Sv48x4,Sv39x4_Sv39,Sv39x4_Sv48,Sv48x4_Sv39,Sv48x4_Sv48,Sha,Shcounterenw,Shgatpa,Shtvala,Shvsatpa,Shvstvala,Shvstvecd',
+            description: 'Comma-separated suite directories to build and run, one ELF (one power cycle) each.')
+        booleanParam(name: 'RUN_HARDWARE', defaultValue: true,
+            description: 'Power-cycle the Megrez and run each suite ELF over UART.')
+        string(name: 'SERIAL_DEV', defaultValue: '/dev/ttyCI-megrez',
+            description: 'Megrez USB-TTL adapter on UART0.')
+        string(name: 'POWER_DEVICE_NAME', defaultValue: 'SCW1050',
+            description: 'Megrez smart-outlet name in devices.json.')
+        string(name: 'INSTALLED_RUNNER_BUILD', defaultValue: '',
+            description: 'Optional override; blank uses ci/runner_inventory.json.')
+        string(name: 'UART_READY_TIMEOUT', defaultValue: '300',
+            description: 'Seconds allowed for each power-cycled Megrez (SPI boot + DDR training) to advertise READY.')
+        string(name: 'UART_RESULT_TIMEOUT', defaultValue: '900',
+            description: 'Seconds allowed for each suite ELF to finish after transfer.')
+        booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: true,
+            description: 'Add an AI analysis (failure reason, root cause, next step) for every failed case; advisory, never changes test verdicts. Falls back to deterministic triage if the AI cannot run.')
+        choice(name: 'AI_TRIAGE_PROVIDER', choices: ['codex', 'openai'],
+            description: 'codex: the Codex CLI on the agent, logged in with a ChatGPT account. openai: the OpenAI API with AI_TRIAGE_CREDENTIAL_ID.')
+        string(name: 'AI_TRIAGE_MODEL', defaultValue: '',
+            description: 'Model name; blank uses the provider default.')
+        string(name: 'AI_TRIAGE_CREDENTIAL_ID', defaultValue: 'openai-api-key',
+            description: 'Jenkins Secret Text credential with an OpenAI API key (openai provider only).')
+        string(name: 'AI_TRIAGE_MAX_FAILURES', defaultValue: '0',
+            description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
+        booleanParam(name: 'PUBLISH_RESULTS', defaultValue: true,
+            description: 'Publish the per-case results to the results portal.')
+        string(name: 'PORTAL_CREDENTIAL_ID', defaultValue: 'riscv-portal-ingest-token',
+            description: 'Jenkins secret-text credential containing the portal ingest token.')
+    }
+
+    environment {
+        RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
+        LOCAL_TOOLS_SOURCE = '/data/ci/tools'
+        LOCAL_TUYA_DEVICES_SOURCE = '/data/ci/devices.json'
+        INSTALLED_RUNNER_BUILD = "${params.INSTALLED_RUNNER_BUILD ?: ''}"
+        UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'SCW1050'}"
+        PATH = '/data/ci/bin:/data/ci/toolchains/riscv64/bin:/usr/local/bin:/usr/bin:/bin'
+    }
+
+    stages {
+        stage('Clean Checkout') {
+            steps {
+                deleteDir()
+                sh '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    runner_branch="${RUNNER_BRANCH:-vf2-uart-stream-jenkins}"
+                    git check-ref-format --branch "$runner_branch" >/dev/null
+                    git init -q .
+                    git remote add origin "$RUNNER_REMOTE_URL"
+                    runner_ref="refs/remotes/origin/$runner_branch"
+                    fetch_ok=false
+                    for attempt in 1 2 3 4; do
+                      if timeout 180 git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
+                        fetch --force --prune origin "+refs/heads/$runner_branch:$runner_ref"; then
+                        fetch_ok=true
+                        break
+                      fi
+                      [[ "$attempt" -eq 4 ]] || sleep "$((attempt * 15))"
+                    done
+                    [[ "$fetch_ok" == true ]] || { echo "Runner fetch failed: $runner_branch" >&2; exit 1; }
+                    selected="${RUNNER_REVISION_OVERRIDE:-$(git rev-parse --verify "${runner_ref}^{commit}")}"
+                    git checkout -q --detach "$(git rev-parse --verify "$selected^{commit}")"
+                    mkdir -p tools
+                    cp -a "$LOCAL_TOOLS_SOURCE/." tools/
+                    install -m 0600 "$LOCAL_TUYA_DEVICES_SOURCE" devices.json
+                    echo "Runner: $runner_branch @ $(git rev-parse HEAD)"
+                    test -x ci/jenkins/megrez_damo.sh
+                '''
+            }
+        }
+
+        stage('Build damo Suites for Megrez') {
+            steps { sh 'ci/jenkins/megrez_damo.sh prepare' }
+        }
+
+        stage('Megrez UART Execute') {
+            when { expression { return params.RUN_HARDWARE } }
+            steps {
+                // SCW1050 powers the Megrez and is shared with the other boards' jobs:
+                // hold all three board locks, like the Megrez ACT jobs.
+                lock(resource: 'vf2-hardware') {
+                lock(resource: 'bpif3-hardware') {
+                lock(resource: 'megrez-hardware') {
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                        sh 'ci/jenkins/megrez_damo.sh run'
+                    }
+                }
+                }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'test ! -x ci/jenkins/megrez_damo.sh || ci/jenkins/megrez_damo.sh finalize || true'
+            junit testResults: "logs/runs/jenkins_megrez_damo_${env.BUILD_NUMBER}/junit.xml",
+                  allowEmptyResults: true,
+                  keepLongStdio: true
+            script {
+                // Failure triage (AI when available): advisory only, never changes a verdict.
+                def triageCommand = '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    ci/triage/jenkins_triage.sh \\
+                      "logs/runs/jenkins_megrez_damo_${BUILD_NUMBER}" \\
+                      "logs/jenkins/megrez_damo/jenkins_megrez_damo_${BUILD_NUMBER}" \\
+                      milkv_megrez_eic7700x
+                '''
+                def triageRc = 0
+                if (params.RUN_AI_TRIAGE && params.AI_TRIAGE_PROVIDER == 'openai') {
+                    try {
+                        withCredentials([string(credentialsId: params.AI_TRIAGE_CREDENTIAL_ID,
+                                                variable: 'OPENAI_API_KEY')]) {
+                            triageRc = sh(script: triageCommand, returnStatus: true)
+                        }
+                    } catch (Exception exc) {
+                        echo "OpenAI credential unavailable (${exc.getMessage()}); deterministic triage only."
+                        withEnv(['RUN_AI_TRIAGE=false']) {
+                            triageRc = sh(script: triageCommand, returnStatus: true)
+                        }
+                    }
+                } else {
+                    triageRc = sh(script: triageCommand, returnStatus: true)
+                }
+                if (triageRc != 0) {
+                    echo "Triage failed with rc=${triageRc}; the results are unchanged."
+                }
+                if (params.PUBLISH_RESULTS) {
+                    withCredentials([string(credentialsId: params.PORTAL_CREDENTIAL_ID,
+                                            variable: 'PORTAL_INGEST_TOKEN')]) {
+                        withEnv(["PORTAL_BUILD_STATUS=${currentBuild.currentResult}"]) {
+                            sh '''#!/usr/bin/env bash
+                                set -euo pipefail
+                                state_root="logs/jenkins/megrez_damo/jenkins_megrez_damo_${BUILD_NUMBER}"
+                                run_root="logs/runs/jenkins_megrez_damo_${BUILD_NUMBER}"
+                                test -f "$run_root/cases.json" || { echo "No results to publish"; exit 0; }
+                                python3 /data/ci/agent/tools/publish_jenkins_results.py \
+                                  --state-root "$state_root" \
+                                  --run-root "$run_root" \
+                                  --board-slug milkv-megrez \
+                                  --board-name 'Milk-V Megrez' \
+                                  --core-profile 'ESWIN EIC7700X/SiFive P550' \
+                                  --job-name "$JOB_NAME" \
+                                  --build-number "$BUILD_NUMBER" \
+                                  --build-url "$BUILD_URL" \
+                                  --status "$PORTAL_BUILD_STATUS" \
+                                  --portal-url 'https://apollo/portal/' \
+                                  --ca-file /data/ci/agent/jenkins-internal-ca.crt \
+                                  --artifact-store /data/ci/agent/results-artifacts \
+                                  --output "$state_root/portal_payload.json" \
+                                  | tee "$state_root/portal_response.json"
+                                python3 -c 'import json, pathlib, sys, urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("Portal response did not contain a run URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://110.93.227.10:9123", u) + chr(10))' \
+                                  "$state_root/portal_response.json" "$state_root/portal_url.txt"
+                                if [[ -f "$run_root/triage/summary.json" ]]; then
+                                  if ! python3 ci/triage/publish_triage.py \
+                                    --run-root "$run_root" \
+                                    --job-name "$JOB_NAME" \
+                                    --build-number "$BUILD_NUMBER" \
+                                    --portal-url 'https://apollo/portal/' \
+                                    --ca-file /data/ci/agent/jenkins-internal-ca.crt \
+                                    --output "$state_root/portal_triage_response.json"; then
+                                    echo 'Advisory triage could not be published; the results are unchanged.' >&2
+                                  fi
+                                fi
+                            '''
+                        }
+                    }
+                    def portalUrlFile = "logs/jenkins/megrez_damo/jenkins_megrez_damo_${env.BUILD_NUMBER}/portal_url.txt"
+                    if (fileExists(portalUrlFile)) {
+                        def portalUrl = readFile(portalUrlFile).trim()
+                        currentBuild.description = "damo: <a href=\"${portalUrl}\">Megrez portal results</a>"
+                        echo "Portal results: ${portalUrl}"
+                    }
+                }
+            }
+            archiveArtifacts artifacts: "logs/jenkins/megrez_damo/jenkins_megrez_damo_${env.BUILD_NUMBER}/**, logs/runs/jenkins_megrez_damo_${env.BUILD_NUMBER}/**",
+                             allowEmptyArchive: true,
+                             fingerprint: true
+        }
+    }
+}

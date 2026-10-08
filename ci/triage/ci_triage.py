@@ -43,6 +43,8 @@ FIELD_PATTERNS = {
     "xstatus": rf"RVCP: XSTATUS:\s*({HEX})",
     "trap_handler_mode": r"RVCP: Trap handler mode:\s*([^\r\n]+)",
     "mismatching_field": r"RVCP: Mismatching field:\s*([^\r\n]+)",
+    # damo-rv-priv-ats assertion: "ASSERT FAIL: <msg>: got 0x.., expected 0x.. (file:line)".
+    "damo_assert": r"ASSERT FAIL: ([^\r\n]+)",
     # Register self-check failures.
     "instruction": rf"RVCP: Instruction:\s*({HEX})",
     "approx_address": rf"RVCP: Approximate address[^:]*:\s*({HEX})",
@@ -137,6 +139,13 @@ def extract_log_evidence(text: str) -> dict[str, Any]:
 
     interesting = []
     markers = (
+        # damo-rv-priv-ats suites
+        "[TEST]",
+        "[FAIL]",
+        "[FATAL]",
+        "ASSERT FAIL",
+        "UNEXPECTED TRAP",
+        "[ERROR]",
         "RVCP:",
         "RVCP-SUMMARY:",
         "[TRAP",
@@ -225,6 +234,12 @@ def classify(case: dict[str, Any], evidence: dict[str, Any]) -> tuple[str, str, 
             f"{register} = {evidence['register_value']}, expected "
             f"{evidence['register_expected']}{where}."
             + (f" ({failure})" if failure else ""),
+        )
+    if evidence.get("damo_assert"):
+        return (
+            "assertion_mismatch",
+            "Needs architectural review",
+            f"Assertion failed: {evidence['damo_assert']}",
         )
     if failure:
         return ("rvcp_failure_reported", "Needs architectural review", explain(""))

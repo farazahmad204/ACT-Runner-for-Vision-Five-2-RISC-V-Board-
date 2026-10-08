@@ -13,6 +13,13 @@ installed runner build, serialize access with a board-specific lock, power
 cycle through the configured smart outlet, and publish results to the portal.
 No Jenkins job writes boot media or builds an SD payload pack.
 
+`megrez-damo-uart-weekly` runs the
+[damo-rv-priv-ats](https://github.com/farazahmad204/damo-rv-priv-ats) privileged and
+hypervisor suites on the Milk-V Megrez (`ci/jenkins/megrez_damo.sh`): it builds each suite
+in `DAMO_SUITES` with `CONFIG=milkv-megrez-p550`, runs one suite ELF per power cycle, and
+`ci/jenkins/damo_cases.py` turns the suites' `[TEST]`/`[PASS]`/`[FAIL]` output into one
+portal row per test case (`<Suite>-<case>`). No reference model is involved.
+
 `riscv-board-health` runs every 10 minutes and tells the portal's Run ELF page
 which boards are online: a board is online when its `/dev/ttyCI-<board>`
 USB-UART is present and its smart plug answers a read-only status query

@@ -136,7 +136,7 @@ pipeline {
                           --portal-url 'https://apollo/portal/' \
                           --ca-file /data/ci/agent/jenkins-internal-ca.crt \
                           --output portal_response.json
-                        python3 -c 'import json, pathlib; r=json.loads(pathlib.Path("portal_response.json").read_text()); pathlib.Path("portal_url.txt").write_text("https://110.93.227.10:9123" + r["url"] + "\n")'
+                        python3 -c 'import json, pathlib; r=json.loads(pathlib.Path("portal_response.json").read_text()); pathlib.Path("portal_url.txt").write_text("https://110.93.227.10:9123" + r["url"] + chr(10))'
                     '''
                 }
             }

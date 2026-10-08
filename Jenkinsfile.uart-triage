@@ -24,12 +24,14 @@ pipeline {
             description: 'Weekly or sanity job whose retained artifacts will be analyzed.')
         string(name: 'SOURCE_BUILD_NUMBER', defaultValue: '1',
             description: 'Existing Jenkins build number retained in the agent artifact store.')
-        booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: false,
-            description: 'Add advisory AI analysis. The original certification verdict is unchanged.')
-        string(name: 'AI_TRIAGE_MODEL', defaultValue: 'gpt-5',
-            description: 'Organization-approved OpenAI Responses API model.')
+        booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: true,
+            description: 'Add an AI analysis (failure reason, root cause, next step) for every failed case; advisory, never changes test verdicts. Falls back to deterministic triage if the AI cannot run.')
+        choice(name: 'AI_TRIAGE_PROVIDER', choices: ['codex', 'openai'],
+            description: 'codex: the Codex CLI on the agent, logged in with a ChatGPT account. openai: the OpenAI API with AI_TRIAGE_CREDENTIAL_ID.')
+        string(name: 'AI_TRIAGE_MODEL', defaultValue: '',
+            description: 'Model name; blank uses the provider default.')
         string(name: 'AI_TRIAGE_CREDENTIAL_ID', defaultValue: 'openai-api-key',
-            description: 'Jenkins Secret Text credential containing the OpenAI API key.')
+            description: 'Jenkins Secret Text credential with an OpenAI API key (openai provider only).')
         string(name: 'AI_TRIAGE_MAX_FAILURES', defaultValue: '0',
             description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
         booleanParam(name: 'PUBLISH_TO_PORTAL', defaultValue: true,
@@ -100,17 +102,9 @@ pipeline {
                           megrez-*) board=milkv_megrez_eic7700x ;;
                           *) board=vf2_jh7110 ;;
                         esac
-                        args=(
-                          --run-root input
-                          --state-root state
-                          --board "$board"
-                          --model "$AI_TRIAGE_MODEL"
-                          --max-ai-failures "$AI_TRIAGE_MAX_FAILURES"
-                        )
-                        [[ "$RUN_AI_TRIAGE" != true ]] || args+=(--ai)
-                        python3 ci/triage/run_ci_triage.py "${args[@]}"
+                        ci/triage/jenkins_triage.sh input state "$board"
                     '''
-                    if (params.RUN_AI_TRIAGE) {
+                    if (params.RUN_AI_TRIAGE && params.AI_TRIAGE_PROVIDER == 'openai') {
                         withCredentials([string(credentialsId: params.AI_TRIAGE_CREDENTIAL_ID,
                                                 variable: 'OPENAI_API_KEY')]) {
                             sh command

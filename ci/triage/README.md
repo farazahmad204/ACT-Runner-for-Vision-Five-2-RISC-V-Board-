@@ -23,18 +23,25 @@ The extractor reads the RVCP diagnostics (trap-signature mismatches with
 XEPC/XCAUSE/XTVAL, mismatching field and hint; register self-checks with the
 bad and expected value) and ignores the `[SIGQ]` signature dump.
 
-## Jenkins parameters
+## AI analysis
 
-- `RUN_TRIAGE`: generate deterministic reports (default: enabled).
-- `RUN_AI_TRIAGE`: add AI reports (default: disabled).
-- `AI_TRIAGE_MODEL`: Responses API model (default: `gpt-5`).
-- `AI_TRIAGE_CREDENTIAL_ID`: Jenkins Secret Text credential containing the API
-  key (default: `openai-api-key`).
-- `AI_TRIAGE_MAX_FAILURES`: optional AI-call cap; `0` analyzes every failure
-  (default: `0`).
+With `RUN_AI_TRIAGE` (default on) every failed case also gets an AI analysis: a
+failure reason, root cause, confidence and next step, shown in the portal
+workbook's AI analysis column. It is advisory and never changes a verdict.
 
-The credential is exposed only inside `withCredentials` and is never written to
-the prompt, reports, console, or archived response metadata.
+- `AI_TRIAGE_PROVIDER=codex` (default) runs the Codex CLI on the agent, logged in
+  with a ChatGPT account. Install `codex` in `/data/ci/bin` and log in once as the
+  agent user: `sudo -u ci-agent -H /data/ci/bin/codex login --device-auth`.
+  Codex runs read-only in an empty directory, without user config or saved
+  sessions; usage counts against that ChatGPT plan.
+- `AI_TRIAGE_PROVIDER=openai` uses the OpenAI Responses API with the Jenkins
+  Secret Text credential `AI_TRIAGE_CREDENTIAL_ID` (default `openai-api-key`).
+- `AI_TRIAGE_MODEL`: blank uses the provider's default model.
+- `AI_TRIAGE_MAX_FAILURES`: cap on AI calls; `0` analyzes every failure.
+
+If the AI cannot run (no `codex`, not logged in, no key), the job says why and
+runs deterministic triage only. `ci/triage/jenkins_triage.sh` holds that logic
+for every job.
 
 ## Manual use
 
@@ -45,7 +52,7 @@ python3 ci/triage/run_ci_triage.py \
   --board vf2_jh7110
 ```
 
-Add AI analysis only when `OPENAI_API_KEY` is set:
+With Codex logged in, add `--ai`. With an OpenAI API key instead:
 
 ```bash
 OPENAI_API_KEY=... python3 ci/triage/run_ci_triage.py \
@@ -53,6 +60,7 @@ OPENAI_API_KEY=... python3 ci/triage/run_ci_triage.py \
   --state-root logs/jenkins/uart_weekly/jenkins_uart_weekly_42 \
   --board vf2_jh7110 \
   --ai \
+  --provider openai \
   --model gpt-5 \
   --max-ai-failures 0
 ```

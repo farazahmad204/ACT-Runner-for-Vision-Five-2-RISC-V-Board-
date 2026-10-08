@@ -7,7 +7,9 @@ from pathlib import Path
 
 from ci.triage.ci_triage import (
     AIConfig,
+    call_codex,
     classify,
+    format_ai_report,
     extract_log_evidence,
     read_bounded_text,
     run_triage,
@@ -154,6 +156,46 @@ class CITriageTests(unittest.TestCase):
             serialized = (run_root / "triage/summary.json").read_text()
             self.assertNotIn("secret-test-key", serialized)
             self.assertTrue((run_root / "triage/per_case/fail-one/ai_analysis.md").is_file())
+
+    def test_ai_answer_becomes_labelled_lines(self):
+        report = format_ai_report(json.dumps({
+            "failure_reason": "hedeleg bit 18 read back 0.",
+            "root_cause": "H draft 0.6 vs H 1.0.",
+            "confidence": "high",
+            "next_step": "Mark as a known deviation.",
+        }))
+        self.assertEqual(report, (
+            "Failure reason: hedeleg bit 18 read back 0.\n"
+            "Root cause: H draft 0.6 vs H 1.0.\n"
+            "Confidence: high\n"
+            "Next step: Mark as a known deviation."
+        ))
+        self.assertEqual(format_ai_report("plain text"), "plain text")
+
+    def test_codex_runs_read_only_with_the_answer_schema(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "argv.json"
+            fake = Path(temporary) / "codex"
+            fake.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, sys\n"
+                "args = sys.argv[1:]\n"
+                f"open({str(log)!r}, 'w').write(json.dumps({{'args': args, 'stdin': sys.stdin.read()}}))\n"
+                "out = args[args.index('-o') + 1]\n"
+                "open(out, 'w').write(json.dumps({'failure_reason': 'x', 'root_cause': 'y',"
+                " 'confidence': 'low', 'next_step': 'z'}))\n"
+            )
+            fake.chmod(0o755)
+            text, meta = call_codex("evidence prompt", AIConfig(provider="codex", codex_bin=str(fake)))
+            seen = json.loads(log.read_text())
+        self.assertEqual(json.loads(text)["root_cause"], "y")
+        self.assertEqual(meta["provider"], "codex")
+        args = seen["args"]
+        self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
+        for flag in ("--ephemeral", "--ignore-user-config", "--output-schema"):
+            self.assertIn(flag, args)
+        self.assertNotIn("-m", args)  # blank model: Codex's default
+        self.assertEqual(seen["stdin"], "evidence prompt")
 
     def test_portal_payload_targets_existing_run(self):
         with tempfile.TemporaryDirectory() as temporary:

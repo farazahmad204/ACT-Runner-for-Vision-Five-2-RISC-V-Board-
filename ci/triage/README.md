@@ -18,6 +18,8 @@ results.
   workbook and marks each failure's Verdict "Needs investigation". Cells a person
   has edited are never overwritten.
 - `riscv-uart-triage` re-triages any retained weekly or sanity build.
+- `riscv-uart-single-elf` (the portal's Run one ELF) triages a failed upload the
+  same way; the uploader sees the AI analysis on the submission page.
 
 The extractor reads the RVCP diagnostics (trap-signature mismatches with
 XEPC/XCAUSE/XTVAL, mismatching field and hint; register self-checks with the
@@ -32,8 +34,10 @@ workbook's AI analysis column. It is advisory and never changes a verdict.
 - `AI_TRIAGE_PROVIDER=codex` (default) runs the Codex CLI on the agent, logged in
   with a ChatGPT account. Install `codex` in `/data/ci/bin` and log in once as the
   agent user: `sudo -u ci-agent -H /data/ci/bin/codex login --device-auth`.
-  Codex runs read-only in an empty directory, without user config or saved
-  sessions; usage counts against that ChatGPT plan.
+  Codex runs with all of its tools disabled (no shell, code execution, browser or
+  plugins), so it can only read the prompt and answer: the read-only sandbox alone
+  would still let commands read files on the agent, and Run ELF logs come from
+  users' own ELFs. Usage counts against that ChatGPT plan.
 - `AI_TRIAGE_PROVIDER=openai` uses the OpenAI Responses API with the Jenkins
   Secret Text credential `AI_TRIAGE_CREDENTIAL_ID` (default `openai-api-key`).
 - `AI_TRIAGE_MODEL`: blank uses the provider's default model.

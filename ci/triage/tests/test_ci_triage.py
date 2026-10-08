@@ -194,6 +194,8 @@ class CITriageTests(unittest.TestCase):
         self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
         for flag in ("--ephemeral", "--ignore-user-config", "--output-schema"):
             self.assertIn(flag, args)
+        disabled = {args[i + 1] for i, arg in enumerate(args) if arg == "--disable"}
+        self.assertTrue({"shell_tool", "unified_exec", "code_mode_host"} <= disabled)
         self.assertNotIn("-m", args)  # blank model: Codex's default
         self.assertEqual(seen["stdin"], "evidence prompt")
 

@@ -22,8 +22,8 @@ pipeline {
         choice(name: 'SOURCE_JOB', choices: ['vf2-uart-weekly', 'bpif3-uart-weekly', 'megrez-uart-weekly',
                                           'vf2-uart-sanity', 'bpif3-uart-sanity', 'megrez-uart-sanity'],
             description: 'Weekly or sanity job whose retained artifacts will be analyzed.')
-        string(name: 'SOURCE_BUILD_NUMBER', defaultValue: '1',
-            description: 'Existing Jenkins build number retained in the agent artifact store.')
+        string(name: 'SOURCE_BUILD_NUMBER', defaultValue: '',
+            description: 'Build number of SOURCE_JOB to triage. Only builds kept in the agent artifact store can be triaged; if the build is not there, the console lists the ones that are.')
         booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: true,
             description: 'Add an AI analysis (failure reason, root cause, next step) for every failed case; advisory, never changes test verdicts. Falls back to deterministic triage if the AI cannot run.')
         choice(name: 'AI_TRIAGE_PROVIDER', choices: ['codex', 'openai'],
@@ -72,8 +72,34 @@ pipeline {
             steps {
                 sh '''#!/usr/bin/env bash
                     set -euo pipefail
+                    echo "Requested: SOURCE_JOB=$SOURCE_JOB SOURCE_BUILD_NUMBER=${SOURCE_BUILD_NUMBER:-<empty>}"
+                    available() {
+                      echo "Builds that can be triaged (job: build numbers with failures to analyze):" >&2
+                      local found=false job_dir job builds
+                      for job_dir in "$ARTIFACT_STORE"/*/; do
+                        [[ -d "$job_dir" ]] || continue
+                        job="$(basename "$job_dir")"
+                        builds="$(python3 - "$job_dir" <<'PY'
+import json, sys
+from pathlib import Path
+keep = []
+for build in Path(sys.argv[1]).iterdir():
+    try:
+        cases = json.loads((build / "cases.json").read_text())
+    except (OSError, ValueError):
+        continue
+    if build.name.isdigit() and any(str(c.get("status", "")).upper() != "PASS" for c in cases):
+        keep.append(int(build.name))
+print(" ".join(str(b) for b in sorted(keep)))
+PY
+)"
+                        [[ -z "$builds" ]] || { echo "  $job: $builds" >&2; found=true; }
+                      done
+                      [[ "$found" == true ]] || echo "  (none)" >&2
+                    }
                     [[ "$SOURCE_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
-                      echo "SOURCE_BUILD_NUMBER must be a positive integer" >&2
+                      echo "SOURCE_BUILD_NUMBER must be a build number." >&2
+                      available
                       exit 2
                     }
                     case "$SOURCE_JOB" in
@@ -83,7 +109,8 @@ pipeline {
                     esac
                     source_root="$ARTIFACT_STORE/$SOURCE_JOB/$SOURCE_BUILD_NUMBER"
                     test -f "$source_root/cases.json" || {
-                      echo "Retained cases.json not found: $source_root/cases.json" >&2
+                      echo "$SOURCE_JOB #$SOURCE_BUILD_NUMBER is not in the artifact store ($source_root)." >&2
+                      available
                       exit 2
                     }
                     mkdir -p input state

@@ -42,6 +42,10 @@ JOB_CONFIGS = {
         "Jenkinsfile.megrez-uart-weekly",
         "ci/jenkins/job-config-megrez-uart-weekly.xml",
     ),
+    "megrez-damo-uart-weekly": (
+        "Jenkinsfile.megrez-damo-uart-weekly",
+        "ci/jenkins/job-config-megrez-damo-uart-weekly.xml",
+    ),
     "riscv-uart-single-elf": (
         "Jenkinsfile.uart-single-elf",
         "ci/jenkins/job-config-uart-single-elf.xml",

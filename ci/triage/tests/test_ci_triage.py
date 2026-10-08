@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ci.triage.ci_triage import AIConfig, extract_log_evidence, run_triage
+from ci.triage.ci_triage import (
+    AIConfig,
+    classify,
+    extract_log_evidence,
+    read_bounded_text,
+    run_triage,
+)
 from ci.triage.publish_triage import build_payload
 
 
@@ -20,6 +26,57 @@ class CITriageTests(unittest.TestCase):
         self.assertEqual(evidence["mcause"], "0x0000000000000006")
         self.assertEqual(evidence["mepc"], "0x0000000080000100")
         self.assertEqual(evidence["mtval"], "0x0000000140001002")
+
+    def test_trap_signature_diagnostics_explain_the_failure(self):
+        evidence = extract_log_evidence(
+            'RVCP: Failure: "Mismatch in trap signature! Trap was being handled in M-Mode."\n'
+            "RVCP: Trap handler mode: M-mode\n"
+            "RVCP: Mismatching field: Vector+Mode+Status word (trap signature word 0)\n"
+            "RVCP: Expected value: 0x0000000019000673\n"
+            "RVCP: Actual value:   0x0000000011000673\n"
+            "RVCP: XEPC:    0x0000000090000138\n"
+            "RVCP: XCAUSE:  0x0000000000000003\n"
+            "RVCP: HINT: Vector+Mode word mismatch may indicate: trap handled in wrong\n"
+            "RVCP:       privilege mode (check medeleg/mideleg).\n"
+        )
+        self.assertEqual(evidence["xcause"], "0x0000000000000003")
+        self.assertEqual(evidence["hint"], (
+            "Vector+Mode word mismatch may indicate: trap handled in wrong "
+            "privilege mode (check medeleg/mideleg)."
+        ))
+        category, _owner, explanation = classify({"status": "FAIL"}, evidence)
+        self.assertEqual(category, "architectural_value_mismatch")
+        self.assertIn("Mismatching field: Vector+Mode+Status word", explanation)
+        self.assertIn("xcause=0x0000000000000003", explanation)
+        self.assertIn("Hint: Vector+Mode word mismatch", explanation)
+
+    def test_register_check_failure(self):
+        evidence = extract_log_evidence(
+            'RVCP: Test Info: "test: 13; cg: HSm_mcsr_cg; bin: hedeleg_csrrw1"\n'
+            "RVCP: Instruction: 0x60231073\n"
+            "RVCP: Approximate address (failure may be slightly after this): 0x900002b8\n"
+            "RVCP: Register: x14\n"
+            "RVCP: Bad Value:      0x000000000000b1fe\n"
+            "RVCP: Expected Value: 0x00000000000cb1fe\n"
+        )
+        category, _owner, explanation = classify({"status": "FAIL"}, evidence)
+        self.assertEqual(category, "register_value_mismatch")
+        self.assertTrue(explanation.startswith(
+            "x14 = 0x000000000000b1fe, expected 0x00000000000cb1fe after instruction "
+            "0x60231073 near 0x900002b8."
+        ))
+
+    def test_signature_dump_does_not_hide_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "uart.log"
+            log.write_text(
+                "RVCP: XCAUSE:  0x0000000000000003\n"
+                + "[SIGQ] 0x0000000090028890 : 0xdeadbeefdeadbeef\n" * 20000
+                + "[UART_STREAM] DONE name=x status=FAIL\n"
+            )
+            text = read_bounded_text(log)
+        self.assertNotIn("[SIGQ]", text)
+        self.assertEqual(extract_log_evidence(text)["xcause"], "0x0000000000000003")
 
     def test_deterministic_reports_are_created_without_ai(self):
         with tempfile.TemporaryDirectory() as temporary:

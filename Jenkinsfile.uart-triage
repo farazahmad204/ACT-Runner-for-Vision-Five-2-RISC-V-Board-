@@ -19,8 +19,9 @@ pipeline {
             description: 'Runner branch containing the triage agent.')
         string(name: 'RUNNER_REVISION_OVERRIDE', defaultValue: '',
             description: 'Optional exact runner commit.')
-        choice(name: 'SOURCE_JOB', choices: ['vf2-uart-weekly', 'bpif3-uart-weekly'],
-            description: 'Weekly job whose retained artifacts will be analyzed.')
+        choice(name: 'SOURCE_JOB', choices: ['vf2-uart-weekly', 'bpif3-uart-weekly', 'megrez-uart-weekly',
+                                          'vf2-uart-sanity', 'bpif3-uart-sanity', 'megrez-uart-sanity'],
+            description: 'Weekly or sanity job whose retained artifacts will be analyzed.')
         string(name: 'SOURCE_BUILD_NUMBER', defaultValue: '1',
             description: 'Existing Jenkins build number retained in the agent artifact store.')
         booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: false,
@@ -32,7 +33,7 @@ pipeline {
         string(name: 'AI_TRIAGE_MAX_FAILURES', defaultValue: '0',
             description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
         booleanParam(name: 'PUBLISH_TO_PORTAL', defaultValue: true,
-            description: 'Attach reports to the existing weekly run in the results portal.')
+            description: 'Fill the triage columns of the existing run in the portal workbook.')
         string(name: 'PORTAL_CREDENTIAL_ID', defaultValue: 'riscv-portal-ingest-token',
             description: 'Jenkins Secret Text credential containing the portal ingest token.')
     }
@@ -40,7 +41,7 @@ pipeline {
     environment {
         RUNNER_REMOTE_URL = 'https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
         ARTIFACT_STORE = '/data/ci/agent/results-artifacts'
-        PATH = '/usr/local/bin:/usr/bin:/bin'
+        PATH = '/data/ci/bin:/usr/local/bin:/usr/bin:/bin'
     }
 
     stages {
@@ -74,7 +75,8 @@ pipeline {
                       exit 2
                     }
                     case "$SOURCE_JOB" in
-                      vf2-uart-weekly|bpif3-uart-weekly) ;;
+                      vf2-uart-weekly|bpif3-uart-weekly|megrez-uart-weekly) ;;
+                      vf2-uart-sanity|bpif3-uart-sanity|megrez-uart-sanity) ;;
                       *) echo "Unsupported SOURCE_JOB: $SOURCE_JOB" >&2; exit 2 ;;
                     esac
                     source_root="$ARTIFACT_STORE/$SOURCE_JOB/$SOURCE_BUILD_NUMBER"
@@ -93,8 +95,11 @@ pipeline {
                 script {
                     def command = '''#!/usr/bin/env bash
                         set -euo pipefail
-                        board=vf2_jh7110
-                        [[ "$SOURCE_JOB" != bpif3-uart-weekly ]] || board=bpif3_k1
+                        case "$SOURCE_JOB" in
+                          bpif3-*) board=bpif3_k1 ;;
+                          megrez-*) board=milkv_megrez_eic7700x ;;
+                          *) board=vf2_jh7110 ;;
+                        esac
                         args=(
                           --run-root input
                           --state-root state

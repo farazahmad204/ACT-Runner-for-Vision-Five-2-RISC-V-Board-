@@ -31,6 +31,16 @@ pipeline {
             description: 'VF2 USB-UART device path; prefer a local /dev/serial/by-id path when available.')
         string(name: 'INSTALLED_RUNNER_BUILD', defaultValue: '',
             description: 'Optional override; blank uses ci/runner_inventory.json.')
+        booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: true,
+            description: 'Add an AI analysis (failure reason, root cause, next step) for every failed case; advisory, never changes test verdicts. Falls back to deterministic triage if the AI cannot run.')
+        choice(name: 'AI_TRIAGE_PROVIDER', choices: ['codex', 'openai'],
+            description: 'codex: the Codex CLI on the agent, logged in with a ChatGPT account. openai: the OpenAI API with AI_TRIAGE_CREDENTIAL_ID.')
+        string(name: 'AI_TRIAGE_MODEL', defaultValue: '',
+            description: 'Model name; blank uses the provider default.')
+        string(name: 'AI_TRIAGE_CREDENTIAL_ID', defaultValue: 'openai-api-key',
+            description: 'Jenkins Secret Text credential with an OpenAI API key (openai provider only).')
+        string(name: 'AI_TRIAGE_MAX_FAILURES', defaultValue: '0',
+            description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
         booleanParam(name: 'PUBLISH_RESULTS', defaultValue: true,
             description: 'Publish the normalized run and artifact links to the Apollo results portal.')
         string(name: 'PORTAL_CREDENTIAL_ID', defaultValue: 'riscv-portal-ingest-token',
@@ -145,14 +155,30 @@ pipeline {
                   allowEmptyResults: true,
                   keepLongStdio: true
             script {
-                // Deterministic failure triage: advisory only, never changes a verdict.
-                def triageRc = sh(returnStatus: true, script: '''#!/usr/bin/env bash
+                // Failure triage (AI when available): advisory only, never changes a verdict.
+                def triageCommand = '''#!/usr/bin/env bash
                     set -euo pipefail
-                    run_root="logs/runs/jenkins_uart_sanity_${BUILD_NUMBER}"
-                    state_root="logs/jenkins/uart_sanity/jenkins_uart_sanity_${BUILD_NUMBER}"
-                    test -f "$run_root/cases.json" || { echo "Triage skipped: $run_root/cases.json is unavailable"; exit 0; }
-                    python3 ci/triage/run_ci_triage.py --run-root "$run_root" --state-root "$state_root" --board vf2_jh7110
-                ''')
+                    ci/triage/jenkins_triage.sh \\
+                      "logs/runs/jenkins_uart_sanity_${BUILD_NUMBER}" \\
+                      "logs/jenkins/uart_sanity/jenkins_uart_sanity_${BUILD_NUMBER}" \\
+                      vf2_jh7110
+                '''
+                def triageRc = 0
+                if (params.RUN_AI_TRIAGE && params.AI_TRIAGE_PROVIDER == 'openai') {
+                    try {
+                        withCredentials([string(credentialsId: params.AI_TRIAGE_CREDENTIAL_ID,
+                                                variable: 'OPENAI_API_KEY')]) {
+                            triageRc = sh(script: triageCommand, returnStatus: true)
+                        }
+                    } catch (Exception exc) {
+                        echo "OpenAI credential unavailable (${exc.getMessage()}); deterministic triage only."
+                        withEnv(['RUN_AI_TRIAGE=false']) {
+                            triageRc = sh(script: triageCommand, returnStatus: true)
+                        }
+                    }
+                } else {
+                    triageRc = sh(script: triageCommand, returnStatus: true)
+                }
                 if (triageRc != 0) {
                     echo "ACT CI triage failed with rc=${triageRc}; certification result is unchanged."
                 }

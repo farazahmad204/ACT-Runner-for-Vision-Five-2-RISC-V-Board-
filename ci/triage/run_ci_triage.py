@@ -7,7 +7,7 @@ import argparse
 import os
 from pathlib import Path
 
-from ci_triage import AIConfig, run_triage
+from ci_triage import AI_PROVIDERS, AIConfig, run_triage
 
 
 def main() -> int:
@@ -16,7 +16,18 @@ def main() -> int:
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--board", required=True)
     parser.add_argument("--ai", action="store_true", help="enable advisory AI analysis")
-    parser.add_argument("--model", default=os.environ.get("AI_TRIAGE_MODEL", "gpt-5"))
+    parser.add_argument(
+        "--provider",
+        choices=sorted(AI_PROVIDERS),
+        default=os.environ.get("AI_TRIAGE_PROVIDER") or "codex",
+        help="codex: the Codex CLI logged in with a ChatGPT account; openai: OPENAI_API_KEY",
+    )
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("AI_TRIAGE_MODEL", ""),
+        help="model name; blank uses the provider's default",
+    )
+    parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
     parser.add_argument(
         "--endpoint",
         default=os.environ.get("OPENAI_RESPONSES_ENDPOINT", "https://api.openai.com/v1/responses"),
@@ -27,7 +38,7 @@ def main() -> int:
         default=0,
         help="maximum AI-analyzed failures; 0 analyzes every failure",
     )
-    parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--timeout", type=int, default=300, help="seconds per AI request")
     args = parser.parse_args()
     if args.max_ai_failures < 0:
         parser.error("--max-ai-failures must be non-negative")
@@ -37,7 +48,13 @@ def main() -> int:
         args.state_root,
         args.board,
         ai_enabled=args.ai,
-        ai_config=AIConfig(model=args.model, endpoint=args.endpoint, timeout_seconds=args.timeout),
+        ai_config=AIConfig(
+            model=args.model,
+            provider=args.provider,
+            endpoint=args.endpoint,
+            timeout_seconds=args.timeout,
+            codex_bin=args.codex_bin,
+        ),
         api_key=os.environ.get("OPENAI_API_KEY", ""),
         max_ai_failures=args.max_ai_failures,
     )

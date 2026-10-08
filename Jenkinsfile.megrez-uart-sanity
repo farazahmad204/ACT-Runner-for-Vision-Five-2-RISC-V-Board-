@@ -159,6 +159,17 @@ pipeline {
                   allowEmptyResults: true,
                   keepLongStdio: true
             script {
+                // Deterministic failure triage: advisory only, never changes a verdict.
+                def triageRc = sh(returnStatus: true, script: '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    run_root="logs/runs/jenkins_megrez_uart_sanity_${BUILD_NUMBER}"
+                    state_root="logs/jenkins/megrez_uart_sanity/jenkins_megrez_uart_sanity_${BUILD_NUMBER}"
+                    test -f "$run_root/cases.json" || { echo "Triage skipped: $run_root/cases.json is unavailable"; exit 0; }
+                    python3 ci/triage/run_ci_triage.py --run-root "$run_root" --state-root "$state_root" --board milkv_megrez_eic7700x
+                ''')
+                if (triageRc != 0) {
+                    echo "ACT CI triage failed with rc=${triageRc}; certification result is unchanged."
+                }
                 if (params.PUBLISH_RESULTS) {
                     withCredentials([string(credentialsId: params.PORTAL_CREDENTIAL_ID,
                                             variable: 'PORTAL_INGEST_TOKEN')]) {
@@ -184,6 +195,17 @@ pipeline {
                                   | tee "$state_root/portal_response.json"
                                 python3 -c 'import json, pathlib, sys, urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("Portal response did not contain a run URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://110.93.227.10:9123", u) + chr(10))' \
                                   "$state_root/portal_response.json" "$state_root/portal_url.txt"
+                                if [[ -f "$run_root/triage/summary.json" ]]; then
+                                  if ! python3 ci/triage/publish_triage.py \
+                                    --run-root "$run_root" \
+                                    --job-name "$JOB_NAME" \
+                                    --build-number "$BUILD_NUMBER" \
+                                    --portal-url 'https://apollo/portal/' \
+                                    --ca-file /data/ci/agent/jenkins-internal-ca.crt \
+                                    --output "$state_root/portal_triage_response.json"; then
+                                    echo 'Advisory triage could not be published; certification result is unchanged.' >&2
+                                  fi
+                                fi
                             '''
                         }
                     }

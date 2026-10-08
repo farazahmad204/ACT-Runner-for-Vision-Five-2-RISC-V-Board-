@@ -9,6 +9,20 @@ The agent never changes ACT, Sail, Spike, hardware, JUnit, or portal verdicts.
 AI output is an investigation aid and is archived separately from certification
 results.
 
+## When it runs
+
+- Every weekly build (`vf2-`, `bpif3-`, `megrez-uart-weekly`, parameter `RUN_TRIAGE`)
+  and every sanity build triages its non-PASS cases after the run.
+- After the run is published, `publish_triage.py` sends the result to the portal,
+  which fills the Root cause, Category, Owner and Evidence columns of the run's
+  workbook and marks each failure's Verdict "Needs investigation". Cells a person
+  has edited are never overwritten.
+- `riscv-uart-triage` re-triages any retained weekly or sanity build.
+
+The extractor reads the RVCP diagnostics (trap-signature mismatches with
+XEPC/XCAUSE/XTVAL, mismatching field and hint; register self-checks with the
+bad and expected value) and ignores the `[SIGQ]` signature dump.
+
 ## Jenkins parameters
 
 - `RUN_TRIAGE`: generate deterministic reports (default: enabled).

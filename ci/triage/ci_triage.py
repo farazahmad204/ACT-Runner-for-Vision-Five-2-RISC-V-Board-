@@ -33,7 +33,22 @@ FIELD_PATTERNS = {
     "first_cause": rf"RVCP: ACT_FIRST_CAUSE:\s*({HEX})",
     "first_epc": rf"RVCP: ACT_FIRST_EPC:\s*({HEX})",
     "first_tval": rf"RVCP: ACT_FIRST_TVAL:\s*({HEX})",
+    # Current ACT trap diagnostics name the CSRs by trap mode (XEPC = MEPC/SEPC/VSEPC).
+    "xepc": rf"RVCP: XEPC:\s*({HEX})",
+    "xcause": rf"RVCP: XCAUSE:\s*({HEX})",
+    "xtval": rf"RVCP: XTVAL:\s*({HEX})",
+    "xstatus": rf"RVCP: XSTATUS:\s*({HEX})",
+    "trap_handler_mode": r"RVCP: Trap handler mode:\s*([^\r\n]+)",
+    "mismatching_field": r"RVCP: Mismatching field:\s*([^\r\n]+)",
+    # Register self-check failures.
+    "instruction": rf"RVCP: Instruction:\s*({HEX})",
+    "approx_address": rf"RVCP: Approximate address[^:]*:\s*({HEX})",
+    "register": r"RVCP: Register:\s*(\S+)",
+    "register_value": rf"RVCP: Bad Value:\s*({HEX})",
+    "register_expected": rf"RVCP: Expected Value:\s*({HEX})",
 }
+# A HINT continues on following "RVCP:" lines indented by two or more spaces.
+HINT_RE = re.compile(r"RVCP: HINT:\s*([^\r\n]+(?:\r?\nRVCP:\s{2,}[^\r\n]+)*)")
 TRAP_RE = re.compile(
     rf"\[TRAP(?:_FIRST(?:_SUMMARY)?)?\].*?"
     rf"(?:mcause|cause)=({HEX}).*?(?:mepc|pc)=({HEX}).*?(?:mtval|tval)=({HEX})"
@@ -56,12 +71,19 @@ def safe_name(value: str) -> str:
 
 
 def read_bounded_text(path: Path) -> str:
+    """Log text without the [SIGQ] signature dump, keeping its head and tail if still large.
+
+    The RVCP diagnostics come before a signature dump that can be hundreds of KB, so
+    keeping only the end of the log would drop them.
+    """
     if not path.is_file():
         return ""
-    data = path.read_bytes()
-    if len(data) > MAX_LOG_BYTES:
-        data = data[-MAX_LOG_BYTES:]
-    return data.decode("utf-8", errors="replace").replace("\x00", "")
+    text = path.read_bytes().decode("utf-8", errors="replace").replace("\x00", "")
+    text = "\n".join(line for line in text.splitlines() if not line.startswith("[SIGQ]"))
+    if len(text) > MAX_LOG_BYTES:
+        half = MAX_LOG_BYTES // 2
+        text = text[:half] + "\n[... log truncated ...]\n" + text[-half:]
+    return text
 
 
 def extract_log_evidence(text: str) -> dict[str, Any]:
@@ -70,6 +92,12 @@ def extract_log_evidence(text: str) -> dict[str, Any]:
         match = re.search(pattern, text)
         if match:
             fields[key] = match.group(1).strip()
+
+    hint = HINT_RE.search(text)
+    if hint:
+        fields["hint"] = " ".join(
+            re.sub(r"^RVCP:\s*", "", line.strip()) for line in hint.group(1).splitlines()
+        )
 
     traps = [
         {"cause": cause, "pc": pc, "tval": tval}
@@ -126,19 +154,52 @@ def classify(case: dict[str, Any], evidence: dict[str, Any]) -> tuple[str, str, 
             "CI infrastructure",
             error or f"Target finished with {status}; architectural execution may be incomplete.",
         )
+    failure = str(evidence.get("failure") or evidence.get("test_info") or "").strip()
+    context = [failure] if failure else []
+    if evidence.get("mismatching_field"):
+        context.append(f"Mismatching field: {evidence['mismatching_field']}.")
+    if evidence.get("trap_handler_mode"):
+        context.append(f"Trap handled in {evidence['trap_handler_mode']}.")
+    if evidence.get("xcause") or evidence.get("xepc"):
+        context.append(
+            f"xcause={evidence.get('xcause', '?')} xepc={evidence.get('xepc', '?')} "
+            f"xtval={evidence.get('xtval', '?')}."
+        )
+    hint = f" Hint: {evidence['hint']}" if evidence.get("hint") else ""
+
+    def explain(observation: str) -> str:
+        return " ".join([*context, observation]).strip() + hint
+
     if expected_cause and actual_cause and expected_cause != actual_cause:
         return (
             "trap_cause_mismatch",
             "Needs architectural review",
-            f"Expected cause {expected_cause}, observed {actual_cause}.",
+            explain(f"Expected cause {expected_cause}, observed {actual_cause}."),
         )
     if expected_value and actual_value and expected_value != actual_value:
         return (
             "architectural_value_mismatch",
             "Needs architectural review",
-            f"Expected value {expected_value}, observed {actual_value}.",
+            explain(f"Expected value {expected_value}, observed {actual_value}."),
         )
-    if evidence.get("mcause") or evidence.get("trap_records"):
+    register = evidence.get("register")
+    if register and evidence.get("register_value") and evidence.get("register_expected"):
+        where = ""
+        if evidence.get("instruction") or evidence.get("approx_address"):
+            where = (
+                f" after instruction {evidence.get('instruction', '?')}"
+                f" near {evidence.get('approx_address', '?')}"
+            )
+        return (
+            "register_value_mismatch",
+            "Needs architectural review",
+            f"{register} = {evidence['register_value']}, expected "
+            f"{evidence['register_expected']}{where}."
+            + (f" ({failure})" if failure else ""),
+        )
+    if failure:
+        return ("rvcp_failure_reported", "Needs architectural review", explain(""))
+    if evidence.get("mcause") or evidence.get("xcause") or evidence.get("trap_records"):
         return (
             "trap_or_signature_failure",
             "Needs provenance review",

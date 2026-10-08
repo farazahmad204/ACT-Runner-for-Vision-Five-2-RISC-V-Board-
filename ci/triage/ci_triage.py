@@ -419,11 +419,23 @@ def call_openai(prompt: str, config: AIConfig, api_key: str) -> tuple[str, dict[
     raise RuntimeError(f"AI analysis failed after 3 attempts: {last_error}")
 
 
+# Codex features that give the model tools (shell, code execution, browser, plugins...). All are
+# turned off: the read-only sandbox still lets commands read any file, and the evidence can come
+# from a user's own ELF (Run ELF), so the model must only answer from the prompt.
+CODEX_DISABLED_FEATURES = (
+    "shell_tool", "unified_exec", "code_mode_host", "browser_use", "browser_use_external",
+    "computer_use", "in_app_browser", "apps", "plugins", "remote_plugin", "multi_agent",
+    "image_generation", "hooks", "skill_mcp_dependency_install", "skill_search", "tool_suggest",
+    "goals",
+)
+
+
 def call_codex(prompt: str, config: AIConfig, api_key: str = "") -> tuple[str, dict[str, Any]]:
     """Ask the Codex CLI (logged in with a ChatGPT account) for one failure analysis.
 
-    Codex runs read-only in an empty directory, without the user's config, rules or saved
-    sessions; the evidence goes in on stdin and the JSON answer comes back in a file.
+    Codex runs with every tool disabled (it can only read the prompt and answer), read-only in
+    an empty directory, without the user's config, rules or saved sessions; the evidence goes in
+    on stdin and the JSON answer comes back in a file.
     """
     codex = shutil.which(config.codex_bin)
     if not codex:
@@ -441,7 +453,10 @@ def call_codex(prompt: str, config: AIConfig, api_key: str = "") -> tuple[str, d
                 codex, "exec", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
                 "--ignore-rules", "--sandbox", "read-only", "--color", "never",
                 "-C", str(work), "--output-schema", str(schema), "-o", str(answer),
+                "-c", 'web_search="disabled"',
             ]
+            for feature in CODEX_DISABLED_FEATURES:
+                command += ["--disable", feature]
             if config.model:
                 command += ["-m", config.model]
             command.append("-")

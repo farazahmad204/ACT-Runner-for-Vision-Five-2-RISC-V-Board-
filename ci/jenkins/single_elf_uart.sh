@@ -102,8 +102,44 @@ run() {
     --result-timeout "${UART_RESULT_TIMEOUT:-600}"
 }
 
+# Triage a failed run (AI analysis when it can run). The portal shows the uploaded ELF under
+# its original name, so the triage case uses ELF_NAME too.
+triage() {
+  board_settings
+  if [[ ! -f "$run_root/summary.json" ]]; then
+    echo "Triage skipped: no UART result in $run_root"
+    return 0
+  fi
+  python3 - "$run_root" "${ELF_NAME:-payload.elf}" <<'PY'
+import json
+import shutil
+import sys
+from pathlib import Path
+
+run_root, name = Path(sys.argv[1]), sys.argv[2]
+results = json.loads((run_root / "summary.json").read_text()).get("results") or [{}]
+result = results[0]
+status = str(result.get("status", "ERROR")).upper()
+source_log = Path(str(result.get("uart_log", "")))
+log = Path("per_case") / "elf" / "uart.log"
+if source_log.is_file():
+    (run_root / log).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_log, run_root / log)
+case = {
+    "test_name": name,
+    "status": status,
+    "tohost": str(result.get("tohost", "")),
+    "root_cause": "" if status == "PASS" else str(result.get("error", status)),
+    "uart_log": str(log) if (run_root / log).is_file() else "",
+}
+(run_root / "cases.json").write_text(json.dumps([case], indent=2) + "\n")
+PY
+  ci/triage/jenkins_triage.sh "$run_root" "$state_root" "$board_id"
+}
+
 case "$action" in
   prepare) prepare ;;
   run) run ;;
-  *) echo "Usage: $0 {prepare|run}" >&2; exit 2 ;;
+  triage) triage ;;
+  *) echo "Usage: $0 {prepare|run|triage}" >&2; exit 2 ;;
 esac

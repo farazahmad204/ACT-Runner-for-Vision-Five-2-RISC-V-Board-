@@ -31,6 +31,13 @@ pipeline {
         string(name: 'UART_READY_TIMEOUT', defaultValue: '',
                description: 'Runner READY timeout in seconds; blank uses the board default (240, Megrez 300).')
         string(name: 'UART_RESULT_TIMEOUT', defaultValue: '600', description: 'ELF completion timeout.')
+        booleanParam(name: 'RUN_AI_TRIAGE', defaultValue: true,
+            description: 'Add an AI analysis (failure reason, root cause, next step) when the ELF fails; advisory only.')
+        choice(name: 'AI_TRIAGE_PROVIDER', choices: ['codex', 'openai'],
+            description: 'codex: the Codex CLI on the agent (ChatGPT login). openai: the OpenAI API with AI_TRIAGE_CREDENTIAL_ID.')
+        string(name: 'AI_TRIAGE_MODEL', defaultValue: '', description: 'Model name; blank uses the provider default.')
+        string(name: 'AI_TRIAGE_CREDENTIAL_ID', defaultValue: 'openai-api-key',
+            description: 'Jenkins Secret Text credential with an OpenAI API key (openai provider only).')
     }
 
     environment {
@@ -112,6 +119,28 @@ pipeline {
                   allowEmptyResults: true,
                   keepLongStdio: true
             script {
+                // Failure triage (AI when available): advisory only, never changes the result.
+                if (fileExists('ci/jenkins/single_elf_uart.sh')) {
+                    def triageRc = 0
+                    if (params.RUN_AI_TRIAGE && params.AI_TRIAGE_PROVIDER == 'openai') {
+                        try {
+                            withCredentials([string(credentialsId: params.AI_TRIAGE_CREDENTIAL_ID,
+                                                    variable: 'OPENAI_API_KEY')]) {
+                                triageRc = sh(script: 'ci/jenkins/single_elf_uart.sh triage', returnStatus: true)
+                            }
+                        } catch (Exception exc) {
+                            echo "OpenAI credential unavailable (${exc.getMessage()}); deterministic triage only."
+                            withEnv(['RUN_AI_TRIAGE=false']) {
+                                triageRc = sh(script: 'ci/jenkins/single_elf_uart.sh triage', returnStatus: true)
+                            }
+                        }
+                    } else {
+                        triageRc = sh(script: 'ci/jenkins/single_elf_uart.sh triage', returnStatus: true)
+                    }
+                    if (triageRc != 0) {
+                        echo "Triage failed with rc=${triageRc}; the UART result is unchanged."
+                    }
+                }
                 if (fileExists('ci/jenkins/publish_single_elf_result.py')) {
                     withCredentials([string(credentialsId: 'riscv-portal-ingest-token',
                                             variable: 'PORTAL_INGEST_TOKEN')]) {
@@ -136,6 +165,17 @@ pipeline {
                               | tee "$state_root/portal_response.json"
                             python3 -c 'import json,pathlib,sys,urllib.parse; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); u=r.get("url"); u or sys.exit("missing portal URL"); pathlib.Path(sys.argv[2]).write_text(urllib.parse.urljoin("https://110.93.227.10:9123",u)+"\\n")' \
                               "$state_root/portal_response.json" "$state_root/portal_url.txt"
+                            if [[ -f "$run_root/triage/summary.json" ]]; then
+                              if ! python3 ci/triage/publish_triage.py \
+                                --run-root "$run_root" \
+                                --job-name "$JOB_NAME-$TARGET_BOARD" \
+                                --build-number "$BUILD_NUMBER" \
+                                --portal-url "$PORTAL_URL" \
+                                --ca-file "$INTERNAL_CA_FILE" \
+                                --output "$state_root/portal_triage_response.json"; then
+                                echo 'Advisory triage could not be published; the UART result is unchanged.' >&2
+                              fi
+                            fi
                         '''
                     }
                     def portalFile = "logs/jenkins/single_elf/${env.BUILD_NUMBER}/portal_url.txt"
@@ -146,7 +186,7 @@ pipeline {
                     }
                 }
             }
-            archiveArtifacts artifacts: "logs/jenkins/single_elf/${env.BUILD_NUMBER}/state.env, logs/jenkins/single_elf/${env.BUILD_NUMBER}/portal_*.json, logs/jenkins/single_elf/${env.BUILD_NUMBER}/portal_url.txt, logs/runs/jenkins_single_elf_${env.BUILD_NUMBER}/**",
+            archiveArtifacts artifacts: "logs/jenkins/single_elf/${env.BUILD_NUMBER}/state.env, logs/jenkins/single_elf/${env.BUILD_NUMBER}/portal_*.json, logs/jenkins/single_elf/${env.BUILD_NUMBER}/portal_url.txt, logs/jenkins/single_elf/${env.BUILD_NUMBER}/portal_triage_response.json, logs/runs/jenkins_single_elf_${env.BUILD_NUMBER}/**",
                              allowEmptyArchive: true,
                              fingerprint: true
         }

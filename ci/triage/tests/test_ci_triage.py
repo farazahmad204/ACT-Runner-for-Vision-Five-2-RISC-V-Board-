@@ -133,8 +133,8 @@ class CITriageTests(unittest.TestCase):
             (run_root / "cases.json").write_text(
                 json.dumps(
                     [
-                        {"test_name": "fail-one", "status": "FAIL"},
-                        {"test_name": "fail-two", "status": "FAIL"},
+                        {"test_name": "fail-one", "status": "FAIL", "root_cause": "first"},
+                        {"test_name": "fail-two", "status": "FAIL", "root_cause": "second"},
                     ]
                 )
             )
@@ -148,6 +148,7 @@ class CITriageTests(unittest.TestCase):
                 api_key="secret-test-key",
                 max_ai_failures=1,
                 ai_analyzer=fake_ai,
+                memory_path=root / "memory.sqlite",
             )
 
             self.assertEqual(len(calls), 1)
@@ -209,8 +210,87 @@ class CITriageTests(unittest.TestCase):
                 {"test_name": "b", "status": "SKIPPED"},
                 {"test_name": "c", "status": "FAIL"},
             ]))
-            summary = run_triage(root / "run", root / "state", "milkv_megrez_eic7700x")
+            summary = run_triage(root / "run", root / "state", "milkv_megrez_eic7700x",
+                                 memory_path=root / "memory.sqlite")
         self.assertEqual([r["case"] for r in summary["results"]], ["c"])
+
+    def _run(self, root, cases, logs, **kw):
+        (root / "run").mkdir(exist_ok=True)
+        (root / "state").mkdir(exist_ok=True)
+        for name, text in logs.items():
+            (root / "run" / f"{name}.log").write_text(text)
+        (root / "run" / "cases.json").write_text(json.dumps(cases))
+        return run_triage(root / "run", root / "state", "milkv_megrez_eic7700x",
+                          memory_path=root / "memory.sqlite", **kw)
+
+    def test_same_failure_signature_costs_one_ai_call_and_memory_reuses_it(self):
+        calls = []
+
+        def fake_ai(prompt, config, api_key):
+            calls.append(prompt)
+            return json.dumps({"failure_reason": "x", "root_cause": "trap delegation differs",
+                               "confidence": "high", "next_step": "y"}), {}
+
+        log = ('RVCP: Failure: "Mismatch in trap signature!"\n'
+               "RVCP: Mismatching field: Vector+Mode+Status word (trap signature word 0)\n"
+               "RVCP: Expected value: 0x19000673\nRVCP: Actual value:   0x11000673\n"
+               "RVCP: XEPC:    0x9000013{n}\nRVCP: XCAUSE:  0x3\n")
+        cases = [{"test_name": f"T{n}", "status": "FAIL", "uart_log": f"T{n}.log"} for n in range(3)]
+        logs = {f"T{n}": log.replace("{n}", str(n)) for n in range(3)}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = self._run(root, cases, logs, ai_enabled=True, ai_config=AIConfig(),
+                              ai_analyzer=fake_ai)
+            self.assertEqual(len(calls), 1)  # three tests, one signature
+            self.assertEqual({r["ai_status"] for r in first["results"]}, {"SUCCESS"})
+            self.assertIn("shared by 3 tests", first["results"][2]["analysis_source"])
+            report = (root / "run" / first["results"][1]["report_dir"] / "ai_analysis.md").read_text()
+            self.assertIn("Root cause: trap delegation differs", report)
+            second = self._run(root, cases, logs, ai_enabled=True, ai_config=AIConfig(),
+                               ai_analyzer=fake_ai)
+        self.assertEqual(len(calls), 1)  # nothing new to ask
+        self.assertEqual(second["resolved"]["MEMORY"], 3)
+        self.assertEqual(second["ai_calls"], 0)
+
+    def test_megrez_board_rules_need_no_ai(self):
+        absent = ("[TEST] HENV-01: henvcfg basic read/write\n"
+                  "  [ERROR] UNEXPECTED TRAP in M-mode !!!\n  [ERROR] mcause  = 0x2\n"
+                  "  [ERROR] mepc    = 0x9000d908\n  [ERROR] mtval   = 0x30a027f3\n")
+        mask = ('RVCP: Test Info: "test: 13; cg: HSm_mcsr_cg; bin: hedeleg_csrrw1"\n'
+                "RVCP: Instruction: 0x60231073\nRVCP: Register: x14\n"
+                "RVCP: Bad Value:      0x000000000000b1fe\nRVCP: Expected Value: 0x00000000000cb1fe\n")
+        cases = [{"test_name": "A", "status": "FAIL", "uart_log": "A.log"},
+                 {"test_name": "B", "status": "FAIL", "uart_log": "B.log"}]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = self._run(root, cases, {"A": absent, "B": mask}, ai_enabled=True,
+                                ai_config=AIConfig(), ai_analyzer=lambda *a: self.fail("AI called"))
+            reports = [(root / "run" / r["report_dir"] / "ai_analysis.md").read_text()
+                       for r in summary["results"]]
+        self.assertEqual(summary["resolved"]["RULE"], 2)
+        self.assertIn("does not implement menvcfg", reports[0])
+        self.assertIn("0xb1ff of hedeleg are writable", reports[1])
+        self.assertIn("Source: board knowledge", reports[1])
+
+    def test_unsupported_hardware_bug_claim_is_downgraded(self):
+        from ci.triage.agent import check_answer
+
+        answer = check_answer({"root_cause": "A hardware bug in the core.", "confidence": "high"},
+                              {"extracted": {}})
+        self.assertEqual(answer["confidence"], "low")
+        self.assertIn("hardware bug", answer["checked"])
+
+    def test_version_claim_needs_a_hypervisor_field_for_high_confidence(self):
+        from ci.triage.agent import check_answer
+
+        generic = check_answer(
+            {"root_cause": "A spec-version difference (draft H).", "confidence": "high"},
+            {"extracted": {"mismatching_field": "Vector+Mode+Status word", "expected_value": "0x1"}})
+        specific = check_answer(
+            {"root_cause": "A spec-version difference (draft H).", "confidence": "high"},
+            {"extracted": {"mismatching_field": "MTINST/HTINST", "expected_value": "0x3000"}})
+        self.assertEqual(generic["confidence"], "medium")
+        self.assertEqual(specific["confidence"], "high")
 
     def test_portal_payload_targets_existing_run(self):
         with tempfile.TemporaryDirectory() as temporary:

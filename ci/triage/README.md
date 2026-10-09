@@ -25,6 +25,36 @@ The extractor reads the RVCP diagnostics (trap-signature mismatches with
 XEPC/XCAUSE/XTVAL, mismatching field and hint; register self-checks with the
 bad and expected value) and ignores the `[SIGQ]` signature dump.
 
+## How a failure is explained (cheapest first)
+
+`run_ci_triage.py` treats each non-PASS, non-SKIPPED case like this and stops at the first
+step that explains it:
+
+1. **Memory** (`memory.py`, 0 tokens). Each failure gets a *signature*: its normalized
+   evidence without test-specific addresses (category, mismatching field, expected/actual
+   values, trap cause, CSR of the faulting instruction, assertion text). Analyses are stored
+   in SQLite (`TRIAGE_MEMORY_DB`, default `/data/ci/agent/triage-memory/triage.sqlite`) by
+   board, signature and test, from three sources: **person** (a Verdict or root cause edited
+   in the portal, pulled back by `publish_triage.py` from `/api/v1/triage/feedback/`),
+   **rule** and **ai**. The same test is preferred, then the same signature in another
+   test; a person's verdict overrides rule and AI fields. Run ELF uses a separate memory.
+2. **Board rules** (`agent.py`, 0 tokens) from `board_knowledge/<board>.yaml`, which holds
+   only measured or documented facts: access to a CSR the core does not implement, a CSR
+   read-back that equals the written value masked by the measured writable bits, and
+   value-diff mechanisms the values alone prove (`value_diff.py`, ported from
+   `tools/act_agent`, with the UDB CSR field table in `knowledge/csr_fields.json`).
+3. **AI**, once per *signature cluster* (not per test), with a compact question (about
+   3.6 KB): the rule-based reading, the evidence fields, the value diff, a disassembly
+   window around the failing PC when the ELF is available, key log lines and up to three
+   past findings of the same category. The answer is checked (an unsupported "hardware
+   bug" or a spec-version claim without a hypervisor-specific field loses confidence) and
+   stored.
+
+Measured on Megrez weekly #5 (30 failures): 20 signatures; 12 explained by rules and
+shared signatures without AI; 15 AI calls instead of 30, with questions about a third
+smaller (55 KB sent instead of 166 KB); a second run used memory only (0 calls, 0.3 s).
+`--refresh-memory` analyzes everything again.
+
 ## AI analysis
 
 With `RUN_AI_TRIAGE` (default on) every failed case also gets an AI analysis: a

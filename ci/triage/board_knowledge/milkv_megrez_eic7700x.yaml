@@ -1,0 +1,24 @@
+# Facts the triage agent may rely on for the Milk-V Megrez (ESWIN EIC7700X, SiFive P550).
+# Only measured or documented facts belong here: each one is sent to the AI and used by the
+# deterministic rules, so an unverified entry turns into confident wrong root causes.
+board: milkv_megrez_eic7700x
+facts:
+  - "SiFive P550 implements privileged architecture 1.11 and the hypervisor extension as draft 0.6, not ratified H 1.0 (EIC7700X TRM v1.0.0 Part 1, Table 3-5; OpenSBI 'Priv Version v1.11')."
+  - "The ACT config declares priv 1.12 and H 1.0 only so that UDB generates H tests: tests may expect ratified behavior the core does not claim."
+  - "The CSRs listed under absent_csrs raise illegal instruction on this core (csr_probe on the board, 2026-10-05)."
+  - "hvip reads 0x440 when the runner starts an ELF; the installed runner (megrez-uart-v4-20261002) does not clear it."
+# CSR number -> name; accesses raise illegal instruction (measured).
+absent_csrs:
+  0x30a: menvcfg
+  0x10a: senvcfg
+  0x60a: henvcfg
+  0x605: htimedelta
+  0xc01: time
+  0x14d: stimecmp
+  0xf15: mconfigptr
+# CSR name -> bits that keep a written 1 (measured with csr_probe).
+writable_masks:
+  hedeleg: 0xb1ff
+  medeleg: 0xf0b55d
+  hgatp_vmid: 0x0
+  hgeie: 0x0

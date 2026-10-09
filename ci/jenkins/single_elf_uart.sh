@@ -134,6 +134,9 @@ case = {
 }
 (run_root / "cases.json").write_text(json.dumps([case], indent=2) + "\n")
 PY
+  # Run ELF logs come from users' own ELFs: keep their analyses out of the memory the
+  # ACT/damo jobs reuse, so a crafted log cannot plant an "analysis" for real failures.
+  export TRIAGE_MEMORY_DB="${TRIAGE_MEMORY_DB:-/data/ci/agent/triage-memory/run-elf.sqlite}"
   ci/triage/jenkins_triage.sh "$run_root" "$state_root" "$board_id"
 }
 

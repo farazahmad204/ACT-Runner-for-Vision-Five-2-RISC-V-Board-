@@ -22,8 +22,12 @@ try:
         check_answer, compact_prompt, disassembly, elf_index, failing_address,
         failure_signature, load_knowledge, rule_analysis,
     )
+    from .context import declared_isa, norms, query_terms, spec_passages, test_source
     from .memory import TriageMemory
 except ImportError:  # run as a script from ci/triage
+    from context import (  # type: ignore[no-redef]
+        declared_isa, norms, query_terms, spec_passages, test_source,
+    )
     from agent import (  # type: ignore[no-redef]
         check_answer, compact_prompt, disassembly, elf_index, failing_address,
         failure_signature, load_knowledge, rule_analysis,
@@ -602,6 +606,7 @@ def run_triage(
         records.append(record)
 
     ai_calls = 0
+    board_isa = declared_isa(knowledge) if pending else ""
     for signature, members in pending.items():
         if not ai_enabled:
             continue
@@ -615,10 +620,23 @@ def run_triage(
         lead = members[0]["evidence"]
         names = [m["evidence"]["case"] for m in members]
         elf = elfs.get(str(members[0]["case"].get("suite") or lead["case"]))
+        lead_ex = lead.get("extracted", {})
+        address = failing_address(lead_ex)
+        label, snippet = test_source(elf, address, str(lead_ex.get("damo_assert", "")),
+                                     str(members[0]["case"].get("suite", "")))
+        spec, spec_tag = spec_passages(query_terms(lead))
+        grounding = {
+            "source_label": label,
+            "source": snippet,
+            "norms": norms(snippet, str(lead_ex.get("damo_assert", "")),
+                           "\n".join(lead_ex.get("evidence_lines", []))),
+            "spec": spec,
+            "spec_tag": spec_tag,
+            "isa": board_isa,
+        }
         prompt = compact_prompt(
-            lead, names, knowledge,
-            disassembly(elf, failing_address(lead.get("extracted", {}))),
-            memory.related(board, lead["deterministic_category"], signature),
+            lead, names, knowledge, [] if snippet else disassembly(elf, address),
+            memory.related(board, lead["deterministic_category"], signature), grounding,
         )
         ai_calls += 1
         try:
@@ -626,7 +644,8 @@ def run_triage(
             answer = check_answer(parse_answer(text), lead)
             metadata = {key: raw_response.get(key) for key in
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
-            metadata.update(prompt_chars=len(prompt), cluster_size=len(members))
+            metadata.update(prompt_chars=len(prompt), cluster_size=len(members),
+                            grounding=[k for k in ("source", "norms", "spec", "isa") if grounding.get(k)])
             source = "AI" + (f" (one analysis shared by {len(members)} tests with this failure signature)"
                              if len(members) > 1 else "")
             for member in members:

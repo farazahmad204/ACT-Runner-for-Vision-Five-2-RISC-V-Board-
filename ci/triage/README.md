@@ -55,6 +55,26 @@ shared signatures without AI; 15 AI calls instead of 30, with questions about a 
 smaller (55 KB sent instead of 166 KB); a second run used memory only (0 calls, 0.3 s).
 `--refresh-memory` analyzes everything again.
 
+## What the AI is given (`context.py`)
+
+Each AI question is grounded, every part small and best effort:
+
+- **Test source**: the test's own code around the failing check (addr2line on the failing
+  PC, or the file:line a damo assertion prints), looked up under `TRIAGE_SOURCE_ROOTS`
+  (default: the Jenkins workspace with `external/riscv-arch-test` and
+  `external/damo-rv-priv-ats`; paths recorded by another workspace are remapped).
+- **Requirements**: damo `norm:<ID>` tags in that code resolved to the exact spec sentence
+  from the suite's `NORM/` tables.
+- **Spec text**: the two most relevant passages of the ratified privileged spec, from
+  `knowledge/priv_spec_chunks.json.gz` (riscv-isa-manual, CC-BY-4.0; rebuild with
+  `tools/build_spec_index.py`), ranked by the failure's CSRs, fields and terms.
+- **Declared ISA**: the extensions the board's ACT config declares (`act_config` in
+  `board_knowledge/<board>.yaml`) with its DEVIATION notes.
+
+On Megrez weekly #5 every AI question carried source, spec and ISA (about 5.7 KB each,
+15 calls); the AI then cited the H 1.0 htinst/mtinst rule and asked for the missing
+htval/mtval2 value instead of guessing.
+
 ## AI analysis
 
 With `RUN_AI_TRIAGE` (default on) every failed case also gets an AI analysis: a

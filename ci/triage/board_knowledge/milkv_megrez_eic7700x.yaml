@@ -22,3 +22,5 @@ writable_masks:
   medeleg: 0xf0b55d
   hgatp_vmid: 0x0
   hgeie: 0x0
+# The board's ACT config inside the ACT checkout: its declared extensions go to the AI.
+act_config: config/cores/milkv_megrez/milkv-megrez-p550/milkv-megrez-p550.yaml

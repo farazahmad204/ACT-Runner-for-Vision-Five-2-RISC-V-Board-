@@ -515,7 +515,9 @@ def run_triage(
     cases = json.loads(cases_path.read_text(encoding="utf-8"))
     if not isinstance(cases, list):
         raise ValueError(f"{cases_path}: expected a JSON list")
-    failures = [case for case in cases if str(case.get("status", "")).upper() != "PASS"]
+    # Skipped tests (e.g. damo suites skipping features the core lacks) are not failures.
+    not_failures = {"PASS", "SKIPPED", "SKIP"}
+    failures = [case for case in cases if str(case.get("status", "")).upper() not in not_failures]
     sail = load_status_tsv(state_root / "sail_reference_status.tsv")
     spike = load_status_tsv(state_root / "spike_status.tsv")
     out_root = run_root / "triage"

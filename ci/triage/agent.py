@@ -254,6 +254,9 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
     lines = key_lines(rep) if len(fields) < 3 else []
     if lines:
         parts.append(cap("Key log lines:\n" + "\n".join(lines), 1200))
+    if g.get("known_issues"):
+        parts.append(cap("Reported issues that may match (from the team's issue notes; verify they "
+                         "apply before citing):\n" + "\n".join(g["known_issues"]), 1100))
     if related:
         parts.append(cap("Past findings for the same category (context, may differ):\n"
                          + "\n".join(related), 700))

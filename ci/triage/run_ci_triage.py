@@ -39,6 +39,16 @@ def main() -> int:
         help="maximum AI-analyzed failures; 0 analyzes every failure",
     )
     parser.add_argument("--timeout", type=int, default=300, help="seconds per AI request")
+    parser.add_argument(
+        "--memory",
+        default=os.environ.get("TRIAGE_MEMORY_DB", ""),
+        help="triage memory SQLite file (default /data/ci/agent/triage-memory/triage.sqlite)",
+    )
+    parser.add_argument(
+        "--refresh-memory",
+        action="store_true",
+        help="ignore stored analyses and analyze every failure again (results are still stored)",
+    )
     args = parser.parse_args()
     if args.max_ai_failures < 0:
         parser.error("--max-ai-failures must be non-negative")
@@ -57,10 +67,14 @@ def main() -> int:
         ),
         api_key=os.environ.get("OPENAI_API_KEY", ""),
         max_ai_failures=args.max_ai_failures,
+        memory_path=args.memory or None,
+        refresh_memory=args.refresh_memory,
     )
     print(
         "ACT CI triage: "
-        f"failures={summary['failed_cases']} ai_enabled={summary['ai_enabled']} "
+        f"failures={summary['failed_cases']} signatures={summary['signatures']} "
+        f"memory={summary['resolved']['MEMORY']} rules={summary['resolved']['RULE']} "
+        f"ai_calls={summary['ai_calls']} ai_enabled={summary['ai_enabled']} "
         f"output={args.run_root.resolve() / 'triage'}"
     )
     return 0

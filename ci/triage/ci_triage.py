@@ -17,6 +17,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    from .agent import (
+        check_answer, compact_prompt, disassembly, elf_index, failing_address,
+        failure_signature, load_knowledge, rule_analysis,
+    )
+    from .memory import TriageMemory
+except ImportError:  # run as a script from ci/triage
+    from agent import (  # type: ignore[no-redef]
+        check_answer, compact_prompt, disassembly, elf_index, failing_address,
+        failure_signature, load_knowledge, rule_analysis,
+    )
+    from memory import TriageMemory  # type: ignore[no-redef]
+
 
 HEX = r"0x[0-9a-fA-F]+"
 FIELD_PATTERNS = {
@@ -45,6 +58,10 @@ FIELD_PATTERNS = {
     "mismatching_field": r"RVCP: Mismatching field:\s*([^\r\n]+)",
     # damo-rv-priv-ats assertion: "ASSERT FAIL: <msg>: got 0x.., expected 0x.. (file:line)".
     "damo_assert": r"ASSERT FAIL: ([^\r\n]+)",
+    # damo-rv-priv-ats unexpected trap: "[ERROR] mcause  = 0x2" (mepc, mtval likewise).
+    "trap_mcause": rf"\[ERROR\] mcause\s*=\s*({HEX})",
+    "trap_mepc": rf"\[ERROR\] mepc\s*=\s*({HEX})",
+    "trap_mtval": rf"\[ERROR\] mtval\s*=\s*({HEX})",
     # Register self-check failures.
     "instruction": rf"RVCP: Instruction:\s*({HEX})",
     "approx_address": rf"RVCP: Approximate address[^:]*:\s*({HEX})",
@@ -498,6 +515,29 @@ AI_PROVIDERS: dict[str, Callable[[str, AIConfig, str], tuple[str, dict[str, Any]
 }
 
 
+def parse_answer(text: str) -> dict[str, Any]:
+    try:
+        answer = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        answer = None
+    if not isinstance(answer, dict):
+        return {"root_cause": str(text).strip()}
+    return answer
+
+
+def analysis_report(analysis: dict[str, Any], source: str) -> str:
+    """The portal's AI analysis cell: labelled lines plus where the analysis came from."""
+    body = format_ai_report(json.dumps(analysis))
+    extra = []
+    if analysis.get("verdict"):
+        who = f" by {analysis['confirmed_by']}" if analysis.get("confirmed_by") else ""
+        extra.append(f"Verdict: {analysis['verdict']}{who}")
+    if analysis.get("checked"):
+        extra.append(f"Checked: {analysis['checked']}")
+    extra.append(f"Source: {source}")
+    return "\n".join([body, *extra])
+
+
 def run_triage(
     run_root: Path,
     state_root: Path,
@@ -508,7 +548,13 @@ def run_triage(
     api_key: str = "",
     max_ai_failures: int = 20,
     ai_analyzer: Callable[[str, AIConfig, str], tuple[str, dict[str, Any]]] | None = None,
+    memory_path: str | Path | None = None,
+    refresh_memory: bool = False,
 ) -> dict[str, Any]:
+    """Triage every failure: memory, then board rules, then one AI call per signature cluster.
+
+    max_ai_failures caps AI calls (clusters); 0 means no cap.
+    """
     run_root = run_root.resolve()
     state_root = state_root.resolve()
     cases_path = run_root / "cases.json"
@@ -524,56 +570,109 @@ def run_triage(
     per_case = out_root / "per_case"
     per_case.mkdir(parents=True, exist_ok=True)
 
-    results: list[dict[str, Any]] = []
-    for index, case in enumerate(failures):
+    memory = TriageMemory(memory_path)
+    knowledge = load_knowledge(board)
+    elfs = elf_index(run_root)
+    run_label = run_root.name
+    records: list[dict[str, Any]] = []
+    pending: dict[str, list[dict[str, Any]]] = {}
+    for case in failures:
         evidence = build_evidence(case, run_root, board, sail, spike)
+        signature = failure_signature(evidence)
+        evidence["signature"] = signature
+        relative_log = str(case.get("uart_log") or "")
+        log_text = read_bounded_text(run_root / relative_log) if relative_log else ""
+        record = {"case": case, "evidence": evidence, "signature": signature,
+                  "analysis": None, "source": "", "ai_status": "DISABLED", "ai_error": ""}
+        test = evidence["case"]
+        hit = None if refresh_memory else memory.lookup(board, signature, test)
+        if hit:
+            origin = f"memory: earlier {hit['source']} analysis"
+            if hit["match"] == "same_signature":
+                origin += f" of {hit['matched_test']} (same failure signature)"
+            record.update(analysis=hit, source=origin, ai_status="MEMORY")
+        else:
+            rule = rule_analysis(evidence, log_text, knowledge)
+            if rule:
+                record.update(analysis=rule, source="board knowledge / value diff (no AI)",
+                              ai_status="RULE")
+                memory.remember(board, signature, test, "rule", rule["category"], rule, run_label)
+            else:
+                pending.setdefault(signature, []).append(record)
+        records.append(record)
+
+    ai_calls = 0
+    for signature, members in pending.items():
+        if not ai_enabled:
+            continue
+        if max_ai_failures > 0 and ai_calls >= max_ai_failures:
+            for member in members:
+                member["ai_status"] = "SKIPPED_LIMIT"
+            continue
+        if ai_config is None:
+            raise ValueError("ai_config is required when AI triage is enabled")
+        analyzer = ai_analyzer or AI_PROVIDERS[ai_config.provider]
+        lead = members[0]["evidence"]
+        names = [m["evidence"]["case"] for m in members]
+        elf = elfs.get(str(members[0]["case"].get("suite") or lead["case"]))
+        prompt = compact_prompt(
+            lead, names, knowledge,
+            disassembly(elf, failing_address(lead.get("extracted", {}))),
+            memory.related(board, lead["deterministic_category"], signature),
+        )
+        ai_calls += 1
+        try:
+            text, raw_response = analyzer(prompt, ai_config, api_key)
+            answer = check_answer(parse_answer(text), lead)
+            metadata = {key: raw_response.get(key) for key in
+                        ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
+            metadata.update(prompt_chars=len(prompt), cluster_size=len(members))
+            source = "AI" + (f" (one analysis shared by {len(members)} tests with this failure signature)"
+                             if len(members) > 1 else "")
+            for member in members:
+                member.update(analysis=answer, source=source, ai_status="SUCCESS", metadata=metadata)
+                memory.remember(board, signature, member["evidence"]["case"], "ai",
+                                lead["deterministic_category"], answer, run_label)
+        except Exception as exc:  # Keep AI advisory and non-blocking.
+            for member in members:
+                member.update(ai_status="ERROR", ai_error=str(exc)[:1000])
+    memory.close()
+
+    results: list[dict[str, Any]] = []
+    for record in records:
+        evidence = record["evidence"]
         case_dir = per_case / safe_name(evidence["case"])
         case_dir.mkdir(parents=True, exist_ok=True)
         (case_dir / "evidence.json").write_text(
             json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        (case_dir / "deterministic.md").write_text(
-            deterministic_markdown(evidence), encoding="utf-8"
-        )
-        ai_status = "DISABLED"
-        ai_report = ""
-        ai_error = ""
-        if ai_enabled and max_ai_failures > 0 and index >= max_ai_failures:
-            ai_status = "SKIPPED_LIMIT"
-        elif ai_enabled:
-            if ai_config is None:
-                raise ValueError("ai_config is required when AI triage is enabled")
-            analyzer = ai_analyzer or AI_PROVIDERS[ai_config.provider]
-            try:
-                ai_report, raw_response = analyzer(ai_prompt(evidence), ai_config, api_key)
-                (case_dir / "ai_analysis.md").write_text(
-                    format_ai_report(ai_report).rstrip() + "\n", encoding="utf-8"
-                )
-                response_metadata = {
-                    key: raw_response.get(key)
-                    for key in ("id", "provider", "model", "created_at", "status", "usage")
-                    if key in raw_response
-                }
-                (case_dir / "ai_response_metadata.json").write_text(
-                    json.dumps(response_metadata, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-                ai_status = "SUCCESS"
-            except Exception as exc:  # Keep AI advisory and non-blocking.
-                ai_status = "ERROR"
-                ai_error = str(exc)[:1000]
-                (case_dir / "ai_error.txt").write_text(ai_error + "\n", encoding="utf-8")
+        (case_dir / "deterministic.md").write_text(deterministic_markdown(evidence), encoding="utf-8")
+        if record["analysis"]:
+            (case_dir / "ai_analysis.md").write_text(
+                analysis_report(record["analysis"], record["source"]).rstrip() + "\n", encoding="utf-8"
+            )
+        if record.get("metadata"):
+            (case_dir / "ai_response_metadata.json").write_text(
+                json.dumps(record["metadata"], indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        if record["ai_error"]:
+            (case_dir / "ai_error.txt").write_text(record["ai_error"] + "\n", encoding="utf-8")
         results.append(
             {
                 "case": evidence["case"],
                 "hardware_status": evidence["hardware_status"],
                 "category": evidence["deterministic_category"],
                 "owner": evidence["deterministic_owner"],
-                "ai_status": ai_status,
-                "ai_error": ai_error,
+                "signature": record["signature"],
+                "analysis_source": record["source"],
+                "verdict": (record["analysis"] or {}).get("verdict", ""),
+                "ai_status": record["ai_status"],
+                "ai_error": record["ai_error"],
                 "report_dir": str(case_dir.relative_to(run_root)),
             }
         )
+    counts = {status: sum(1 for r in results if r["ai_status"] == status)
+              for status in ("MEMORY", "RULE", "SUCCESS", "ERROR", "SKIPPED_LIMIT", "DISABLED")}
 
     summary = {
         "schema_version": 1,
@@ -586,6 +685,10 @@ def run_triage(
             (ai_config.model or f"{ai_config.provider} default") if ai_enabled and ai_config else ""
         ),
         "max_ai_failures": max_ai_failures,
+        "signatures": len({r["signature"] for r in results}),
+        "ai_calls": ai_calls,
+        "resolved": counts,
+        "memory_db": memory.path,
         "results": results,
     }
     out_root.mkdir(parents=True, exist_ok=True)
@@ -600,6 +703,9 @@ def run_triage(
         f"- Failed cases: `{len(failures)}`",
         f"- AI enabled: `{str(ai_enabled).lower()}`",
         f"- AI model: `{summary['ai_model'] or 'none'}`",
+        f"- Distinct failure signatures: `{summary['signatures']}`",
+        f"- Explained from memory: `{counts['MEMORY']}`, by board rules: `{counts['RULE']}`, "
+        f"by AI: `{counts['SUCCESS']}` with `{ai_calls}` AI call(s)",
         "",
         "| Case | Category | Preliminary owner | AI | Reports |",
         "|---|---|---|---|---|",

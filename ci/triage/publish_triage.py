@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Publish advisory triage for an existing portal run."""
+"""Publish advisory triage for an existing portal run, then learn from people's edits.
+
+After the triage is published, the portal's person-edited Verdicts and root causes for the
+same board are pulled back into the triage memory, so the next run trusts them over the AI.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +11,14 @@ import argparse
 import json
 import os
 import ssl
+import urllib.parse
 import urllib.request
 from pathlib import Path
+
+try:
+    from .memory import TriageMemory
+except ImportError:  # run as a script from ci/triage
+    from memory import TriageMemory  # type: ignore[no-redef]
 
 
 def build_payload(run_root: Path, job_name: str, build_number: int) -> dict:
@@ -25,7 +35,12 @@ def build_payload(run_root: Path, job_name: str, build_number: int) -> dict:
                 "triage_category": evidence.get("deterministic_category", ""),
                 "triage_owner": evidence.get("deterministic_owner", ""),
                 "triage_explanation": evidence.get("deterministic_explanation", ""),
-                "triage_evidence": evidence.get("extracted", {}),
+                "triage_evidence": {
+                    k: v for k, v in evidence.get("extracted", {}).items() if k != "evidence_lines"
+                },
+                "triage_signature": item.get("signature", ""),
+                "analysis_source": item.get("analysis_source", ""),
+                "verdict": item.get("verdict", ""),
                 "ai_status": item.get("ai_status", ""),
                 "ai_model": summary.get("ai_model", ""),
                 "ai_analysis": (
@@ -34,6 +49,32 @@ def build_payload(run_root: Path, job_name: str, build_number: int) -> dict:
             }
         )
     return {"job_name": job_name, "build_number": build_number, "results": results}
+
+
+def learn_from_portal(base_url: str, token: str, context, job_name: str, board: str,
+                      memory_path: str | None) -> int:
+    """Store person-edited Verdicts/root causes for this job's board in the triage memory."""
+    query = urllib.parse.urlencode({"job_name": job_name})
+    request = urllib.request.Request(
+        base_url.rstrip("/") + f"/api/v1/triage/feedback/?{query}",
+        headers={"X-Portal-Token": token},
+    )
+    with urllib.request.urlopen(request, timeout=60, context=context) as response:
+        items = json.loads(response.read().decode("utf-8")).get("feedback", [])
+    memory = TriageMemory(memory_path)
+    learned = 0
+    for item in items:
+        if not item.get("signature") or not (item.get("verdict") or item.get("root_cause")):
+            continue
+        memory.remember(
+            board, item["signature"], item["test"], "person", item.get("category", ""),
+            {"verdict": item.get("verdict", ""), "root_cause": item.get("root_cause", ""),
+             "confidence": "high", "confirmed_by": item.get("updated_by", "")},
+            str(item.get("run", "")),
+        )
+        learned += 1
+    memory.close()
+    return learned
 
 
 def main() -> int:
@@ -45,6 +86,8 @@ def main() -> int:
     parser.add_argument("--token", default=os.environ.get("PORTAL_INGEST_TOKEN", ""))
     parser.add_argument("--ca-file", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--memory", default=os.environ.get("TRIAGE_MEMORY_DB", ""),
+                        help="triage memory to update with person-edited analyses")
     args = parser.parse_args()
     if not args.token:
         parser.error("portal token is required via --token or PORTAL_INGEST_TOKEN")
@@ -64,6 +107,13 @@ def main() -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered, encoding="utf-8")
     print(rendered, end="")
+    try:
+        board = json.loads((args.run_root / "triage" / "summary.json").read_text())["board"]
+        learned = learn_from_portal(args.portal_url, args.token, context, args.job_name, board,
+                                    args.memory or None)
+        print(f"Triage memory: learned {learned} person-confirmed analyses from the portal")
+    except Exception as exc:  # learning is best effort; the triage is already published
+        print(f"Triage memory: could not read portal feedback ({exc})")
     return 0
 
 

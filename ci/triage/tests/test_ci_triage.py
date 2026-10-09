@@ -199,6 +199,19 @@ class CITriageTests(unittest.TestCase):
         self.assertNotIn("-m", args)  # blank model: Codex's default
         self.assertEqual(seen["stdin"], "evidence prompt")
 
+    def test_skipped_cases_are_not_triaged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "run").mkdir()
+            (root / "state").mkdir()
+            (root / "run" / "cases.json").write_text(json.dumps([
+                {"test_name": "a", "status": "PASS"},
+                {"test_name": "b", "status": "SKIPPED"},
+                {"test_name": "c", "status": "FAIL"},
+            ]))
+            summary = run_triage(root / "run", root / "state", "milkv_megrez_eic7700x")
+        self.assertEqual([r["case"] for r in summary["results"]], ["c"])
+
     def test_portal_payload_targets_existing_run(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_root = Path(temporary)

@@ -73,7 +73,7 @@ def main() -> int:
     print(
         "ACT CI triage: "
         f"failures={summary['failed_cases']} signatures={summary['signatures']} "
-        f"memory={summary['resolved']['MEMORY']} rules={summary['resolved']['RULE']} "
+        f"vault={summary['resolved']['VAULT']} memory={summary['resolved']['MEMORY']} rules={summary['resolved']['RULE']} "
         f"ai_calls={summary['ai_calls']} ai_enabled={summary['ai_enabled']} "
         f"output={args.run_root.resolve() / 'triage'}"
     )

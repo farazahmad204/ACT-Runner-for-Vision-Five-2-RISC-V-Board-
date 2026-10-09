@@ -28,7 +28,8 @@ bad and expected value) and ignores the `[SIGQ]` signature dump.
 ## How a failure is explained (cheapest first)
 
 `run_ci_triage.py` treats each non-PASS, non-SKIPPED case like this and stops at the first
-step that explains it:
+step that explains it (a matching known-issue note, step 2, outranks rule and AI answers
+stored in memory; only a person's verdict outranks the note):
 
 1. **Memory** (`memory.py`, 0 tokens). Each failure gets a *signature*: its normalized
    evidence without test-specific addresses (category, mismatching field, expected/actual
@@ -38,12 +39,20 @@ step that explains it:
    in the portal, pulled back by `publish_triage.py` from `/api/v1/triage/feedback/`),
    **rule** and **ai**. The same test is preferred, then the same signature in another
    test; a person's verdict overrides rule and AI fields. Run ELF uses a separate memory.
-2. **Board rules** (`agent.py`, 0 tokens) from `board_knowledge/<board>.yaml`, which holds
+2. **Known issues** (`vault.py`, 0 tokens): the Obsidian vault `obsidian-vault/` holds one
+   note per reported ACT/Sail issue (and Verification Agent results), with frontmatter
+   saying which boards, test-name globs and evidence substrings identify it. A note marked
+   `auto: true` that names the board and test explains the failure with its verdict and
+   issue link; other matching notes (at most two) go into the AI question. Only a person's
+   verdict in memory outranks a note. Notes are read each run, so editing one takes effect at
+   once; `tools/sync_issue_notes.py` updates their GitHub state from the team's issue sheet
+   and adds stubs for new issues. See `obsidian-vault/README.md`.
+3. **Board rules** (`agent.py`, 0 tokens) from `board_knowledge/<board>.yaml`, which holds
    only measured or documented facts: access to a CSR the core does not implement, a CSR
    read-back that equals the written value masked by the measured writable bits, and
    value-diff mechanisms the values alone prove (`value_diff.py`, ported from
    `tools/act_agent`, with the UDB CSR field table in `knowledge/csr_fields.json`).
-3. **AI**, once per *signature cluster* (not per test), with a compact question (about
+4. **AI**, once per *signature cluster* (not per test), with a compact question (about
    3.6 KB): the rule-based reading, the evidence fields, the value diff, a disassembly
    window around the failing PC when the ELF is available, key log lines and up to three
    past findings of the same category. The answer is checked (an unsupported "hardware

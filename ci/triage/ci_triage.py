@@ -24,6 +24,7 @@ try:
     )
     from .context import declared_isa, norms, query_terms, spec_passages, test_source
     from .memory import TriageMemory
+    from . import vault
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
         declared_isa, norms, query_terms, spec_passages, test_source,
@@ -33,6 +34,7 @@ except ImportError:  # run as a script from ci/triage
         failure_signature, load_knowledge, rule_analysis,
     )
     from memory import TriageMemory  # type: ignore[no-redef]
+    import vault  # type: ignore[no-redef]
 
 
 HEX = r"0x[0-9a-fA-F]+"
@@ -555,7 +557,8 @@ def run_triage(
     memory_path: str | Path | None = None,
     refresh_memory: bool = False,
 ) -> dict[str, Any]:
-    """Triage every failure: memory, then board rules, then one AI call per signature cluster.
+    """Triage every failure, cheapest first: a person's verdict in memory, a known-issue note in
+    the vault, other memory, board rules, then one AI call per signature cluster.
 
     max_ai_failures caps AI calls (clusters); 0 means no cap.
     """
@@ -576,6 +579,7 @@ def run_triage(
 
     memory = TriageMemory(memory_path)
     knowledge = load_knowledge(board)
+    notes = vault.load_notes()
     elfs = elf_index(run_root)
     run_label = run_root.name
     records: list[dict[str, Any]] = []
@@ -590,7 +594,14 @@ def run_triage(
                   "analysis": None, "source": "", "ai_status": "DISABLED", "ai_error": ""}
         test = evidence["case"]
         hit = None if refresh_memory else memory.lookup(board, signature, test)
-        if hit:
+        known = vault.match(notes, board, test, vault.evidence_text(evidence))
+        record["known_issues"] = known
+        resolver = next((n for n in known if vault.resolves(n, board)), None)
+        if resolver and not (hit and hit["source"] == "person"):
+            # Curated notes are read every run (not stored in memory), so editing one takes effect.
+            record.update(analysis=vault.analysis(resolver), ai_status="VAULT",
+                          source=f"known issue {resolver['id']} (Obsidian vault, no AI)")
+        elif hit:
             origin = f"memory: earlier {hit['source']} analysis"
             if hit["match"] == "same_signature":
                 origin += f" of {hit['matched_test']} (same failure signature)"
@@ -633,6 +644,7 @@ def run_triage(
             "spec": spec,
             "spec_tag": spec_tag,
             "isa": board_isa,
+            "known_issues": vault.context_lines(members[0].get("known_issues") or []),
         }
         prompt = compact_prompt(
             lead, names, knowledge, [] if snippet else disassembly(elf, address),
@@ -645,7 +657,8 @@ def run_triage(
             metadata = {key: raw_response.get(key) for key in
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
             metadata.update(prompt_chars=len(prompt), cluster_size=len(members),
-                            grounding=[k for k in ("source", "norms", "spec", "isa") if grounding.get(k)])
+                            grounding=[k for k in ("source", "norms", "spec", "isa", "known_issues")
+                                       if grounding.get(k)])
             source = "AI" + (f" (one analysis shared by {len(members)} tests with this failure signature)"
                              if len(members) > 1 else "")
             for member in members:
@@ -685,13 +698,14 @@ def run_triage(
                 "signature": record["signature"],
                 "analysis_source": record["source"],
                 "verdict": (record["analysis"] or {}).get("verdict", ""),
+                "known_issues": [note["id"] for note in record.get("known_issues") or []],
                 "ai_status": record["ai_status"],
                 "ai_error": record["ai_error"],
                 "report_dir": str(case_dir.relative_to(run_root)),
             }
         )
     counts = {status: sum(1 for r in results if r["ai_status"] == status)
-              for status in ("MEMORY", "RULE", "SUCCESS", "ERROR", "SKIPPED_LIMIT", "DISABLED")}
+              for status in ("VAULT", "MEMORY", "RULE", "SUCCESS", "ERROR", "SKIPPED_LIMIT", "DISABLED")}
 
     summary = {
         "schema_version": 1,
@@ -708,6 +722,7 @@ def run_triage(
         "ai_calls": ai_calls,
         "resolved": counts,
         "memory_db": memory.path,
+        "vault": str(vault.vault_root()),
         "results": results,
     }
     out_root.mkdir(parents=True, exist_ok=True)
@@ -723,7 +738,7 @@ def run_triage(
         f"- AI enabled: `{str(ai_enabled).lower()}`",
         f"- AI model: `{summary['ai_model'] or 'none'}`",
         f"- Distinct failure signatures: `{summary['signatures']}`",
-        f"- Explained from memory: `{counts['MEMORY']}`, by board rules: `{counts['RULE']}`, "
+        f"- Explained by known issues (vault): `{counts['VAULT']}`, from memory: `{counts['MEMORY']}`, by board rules: `{counts['RULE']}`, "
         f"by AI: `{counts['SUCCESS']}` with `{ai_calls}` AI call(s)",
         "",
         "| Case | Category | Preliminary owner | AI | Reports |",

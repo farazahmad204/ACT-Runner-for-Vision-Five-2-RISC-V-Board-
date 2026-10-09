@@ -19,18 +19,20 @@ from typing import Any, Callable
 
 try:
     from .agent import (
-        check_answer, compact_prompt, disassembly, elf_index, failing_address,
+        attach_value_diff, check_answer, compact_prompt, disassembly, elf_index, failing_address,
         failure_signature, load_knowledge, rule_analysis,
     )
-    from .context import declared_isa, norms, query_terms, spec_passages, test_source
+    from .context import (
+        declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
+    )
     from .memory import TriageMemory
     from . import vault
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
-        declared_isa, norms, query_terms, spec_passages, test_source,
+        declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
     )
     from agent import (  # type: ignore[no-redef]
-        check_answer, compact_prompt, disassembly, elf_index, failing_address,
+        attach_value_diff, check_answer, compact_prompt, disassembly, elf_index, failing_address,
         failure_signature, load_knowledge, rule_analysis,
     )
     from memory import TriageMemory  # type: ignore[no-redef]
@@ -594,6 +596,7 @@ def run_triage(
                   "analysis": None, "source": "", "ai_status": "DISABLED", "ai_error": ""}
         test = evidence["case"]
         hit = None if refresh_memory else memory.lookup(board, signature, test)
+        attach_value_diff(evidence, log_text, knowledge)
         known = vault.match(notes, board, test, vault.evidence_text(evidence))
         record["known_issues"] = known
         resolver = next((n for n in known if vault.resolves(n, board)), None)
@@ -635,7 +638,9 @@ def run_triage(
         address = failing_address(lead_ex)
         label, snippet = test_source(elf, address, str(lead_ex.get("damo_assert", "")),
                                      str(members[0]["case"].get("suite", "")))
-        spec, spec_tag = spec_passages(query_terms(lead))
+        terms = query_terms(lead)
+        spec, spec_tag = spec_passages(terms)
+        known_ids = {note["id"] for note in members[0].get("known_issues") or []}
         grounding = {
             "source_label": label,
             "source": snippet,
@@ -645,6 +650,7 @@ def run_triage(
             "spec_tag": spec_tag,
             "isa": board_isa,
             "known_issues": vault.context_lines(members[0].get("known_issues") or []),
+            "issues": related_issues(lead["case"], issue_terms(lead), exclude=known_ids),
         }
         prompt = compact_prompt(
             lead, names, knowledge, [] if snippet else disassembly(elf, address),
@@ -657,7 +663,7 @@ def run_triage(
             metadata = {key: raw_response.get(key) for key in
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
             metadata.update(prompt_chars=len(prompt), cluster_size=len(members),
-                            grounding=[k for k in ("source", "norms", "spec", "isa", "known_issues")
+                            grounding=[k for k in ("source", "norms", "spec", "isa", "known_issues", "issues")
                                        if grounding.get(k)])
             source = "AI" + (f" (one analysis shared by {len(members)} tests with this failure signature)"
                              if len(members) > 1 else "")

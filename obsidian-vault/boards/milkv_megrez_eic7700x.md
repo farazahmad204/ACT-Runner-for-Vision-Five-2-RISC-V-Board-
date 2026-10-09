@@ -13,4 +13,6 @@ Reported issues that apply because the P550 is a priv-1.11 core like the U74:
 [[ACT-1875]] reserved PTE bits, [[ACT-2010]] / [[SAIL-1862]] reserved mcause codes.
 
 H tests: the core implements H draft 0.6 while ACT generates ratified H 1.0 tests; see
-the ACT branch `milkv-megrez-hypervisor` README. No issue reported yet.
+the ACT branch `milkv-megrez-hypervisor` README and our report [[ACT-2717]]: SvH/SvHSm write
+menvcfg through T-SBI and cannot run on a priv-1.11 hart. xtinst checks are relaxed until
+sail-riscv#1982 ([[ACT-2670]]).

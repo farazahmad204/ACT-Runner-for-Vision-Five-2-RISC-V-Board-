@@ -31,7 +31,7 @@ except ImportError:  # run as a script from ci/triage
     import value_diff
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "board_knowledge"
-MAX_PROMPT_CHARS = 8000
+MAX_PROMPT_CHARS = 11000
 KEY_LINE_MARKERS = ("ASSERT FAIL", "[ERROR]", "RVCP: Failure", "RVCP: Mismatching", "RVCP: HINT",
                     "RVCP: Expected", "RVCP: Actual", "RVCP: Bad Value", "RVCP: Instruction",
                     "[FAIL]", "[FATAL]", "TIMEOUT", "no READY")
@@ -250,7 +250,26 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
     parts.append(cap("Evidence: " + json.dumps(fields, separators=(",", ":")), 1500))
     if rep.get("value_diff"):
         parts.append(cap("Value diff: " + json.dumps(rep["value_diff"], separators=(",", ":")), 600))
-    if g.get("source"):
+    case = g.get("case") or {}
+    inst = case.get("instruction") or {}
+    if inst:
+        line = f" (test source line {inst['source_line']})" if inst.get("source_line") else ""
+        parts.append(cap(f"Failing instruction, disassembled from the ELF that ran{line}:\n"
+                         + "\n".join(inst.get("window", [])), 1100))
+    test = case.get("intent") or {}
+    if test.get("code"):
+        header = "; ".join(test.get("header", []))
+        parts.append(cap(f"Test code at the failing check ('>' marks it; test header: {header}):\n"
+                         + test["code"], 1900))
+    if case.get("board_macros"):
+        parts.append(cap("Board macros this check relies on (the board's ACT rvmodel_macros.h):\n"
+                         + "\n".join(case["board_macros"]), 1400))
+    if case.get("sail_settings"):
+        parts.append(cap("The board's Sail reference settings (sail.json) that concern this failure:\n"
+                         + "\n".join(case["sail_settings"]), 800))
+    if test.get("code"):
+        pass
+    elif g.get("source"):
         parts.append(cap(f"Test source ({g['source_label']}, '>' marks the failing line):\n{g['source']}", 1700))
     elif disasm:
         parts.append("Code at the failing PC:\n" + "\n".join(disasm))

@@ -16,6 +16,18 @@ if [[ ! -f "$run_root/cases.json" ]]; then
   echo "Triage skipped: $run_root/cases.json is unavailable"
   exit 0
 fi
+# Keep each failed test's ELF and source and the board's ACT config next to the run, and in
+# the retained artifact store, so this and any later re-triage can read the failing
+# instruction and the test. A re-triage job reads the store copy and has nothing to add.
+store_args=()
+store_root="${TRIAGE_ARTIFACT_STORE:-/data/ci/agent/results-artifacts}"
+if [[ -n "${JOB_NAME:-}" && -n "${BUILD_NUMBER:-}" && "$JOB_NAME" != riscv-uart-triage \
+      && -d "$store_root" ]]; then
+  store_args=(--store-dir "$store_root/${JOB_NAME//[^A-Za-z0-9_.-]/_}/$BUILD_NUMBER")
+fi
+python3 "$here/collect_case_files.py" --run-root "$run_root" --state-root "$state_root" \
+  --board "$board" "${store_args[@]}" || true
+
 args=(--run-root "$run_root" --state-root "$state_root" --board "$board"
       --max-ai-failures "${AI_TRIAGE_MAX_FAILURES:-0}")
 if [[ "${REFRESH_MEMORY:-false}" == true ]]; then

@@ -110,13 +110,14 @@ triage() {
     echo "Triage skipped: no UART result in $run_root"
     return 0
   fi
-  python3 - "$run_root" "${ELF_NAME:-payload.elf}" <<'PY'
+  python3 - "$run_root" "${ELF_NAME:-payload.elf}" "$payload" <<'PY'
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
 
-run_root, name = Path(sys.argv[1]), sys.argv[2]
+run_root, name, payload = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 results = json.loads((run_root / "summary.json").read_text()).get("results") or [{}]
 result = results[0]
 status = str(result.get("status", "ERROR")).upper()
@@ -133,6 +134,11 @@ case = {
     "uart_log": str(log) if (run_root / log).is_file() else "",
 }
 (run_root / "cases.json").write_text(json.dumps([case], indent=2) + "\n")
+# The ELF that ran, so triage can disassemble the failing instruction.
+if payload.is_file():
+    folder = run_root / "per_case" / (re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._") or "case")
+    folder.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(payload, folder / "test.elf")
 PY
   # Run ELF logs come from users' own ELFs: keep their analyses out of the memory the
   # ACT/damo jobs reuse, so a crafted log cannot plant an "analysis" for real failures.

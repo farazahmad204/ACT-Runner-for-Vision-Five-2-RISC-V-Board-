@@ -135,11 +135,16 @@ def collect(run_root: Path, state_root: Path, board: str, act_root: Path,
             copy(path, act_out / "env" / path.name)
     revision = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(act_root), "rev-parse", "HEAD"],
                               capture_output=True, text=True).stdout.strip()
+    sail = ""
+    act_config_py = act_root / "framework" / "src" / "act" / "config.py"
+    if act_config_py.is_file():
+        found = re.search(r'^REQUIRED_SAIL_VERSION = "([^"]+)"', act_config_py.read_text(encoding="utf-8"), re.M)
+        sail = found.group(1) if found else ""
     if config or env.is_dir():
         act_out.mkdir(parents=True, exist_ok=True)
         (act_out / "revision.txt").write_text(
-            f"act_commit={revision}\nconfig_dir={config.relative_to(act_root) if config else ''}\n",
-            encoding="utf-8")
+            f"act_commit={revision}\nconfig_dir={config.relative_to(act_root) if config else ''}\n"
+            f"sail_version={sail}\n", encoding="utf-8")
     return counts
 
 

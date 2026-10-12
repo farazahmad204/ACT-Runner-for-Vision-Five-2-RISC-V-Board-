@@ -37,12 +37,17 @@ generated_test_root="$state_root/generated_tests"
 missing_report="$state_root/reference_failed_no_hardware_elf.txt"
 reference_status="$state_root/sail_reference_status.tsv"
 priv_source_roots="$state_root/priv_source_roots.txt"
-sail_bin="${SAIL_BIN:-/data/ci/toolchains/riscv-sail-0.14.1/bin/sail_riscv_sim}"
-sail_expected_version="${SAIL_EXPECTED_VERSION:-0.13}"
+# Sail is chosen by the ACT checkout: framework/src/act/config.py names the one version it
+# accepts (REQUIRED_SAIL_VERSION), installed side by side as /data/ci/toolchains/riscv-sail-<v>.
+# SAIL_VERSION_PIN / SAIL_BIN_PIN override it for experiments.
+sail_root="${SAIL_ROOT:-/data/ci/toolchains}"
+sail_expected_version="${SAIL_VERSION_PIN:-}"
+sail_bin="${SAIL_BIN_PIN:-}"
 act_remote_url="${ACT_REMOTE_URL:-https://github.com/Arshia2564/riscv-arch-test.git}"
 act_branch="${ACT_BRANCH:-sifive_u74}"
 act_revision_override="${ACT_REVISION_OVERRIDE:-}"
 act_revision_file="$state_root/resolved_act_revision.txt"
+sail_version_file="$state_root/sail_version.txt"
 act_expected_revision="$act_revision_override"
 
 if [[ "$stage" != "preflight" && -s "$act_revision_file" ]]; then
@@ -51,6 +56,23 @@ fi
 
 all_extensions="${ACT_EXTENSIONS:-all}"
 act_root="$repo_root/external/riscv-arch-test"
+
+select_sail() {
+  # Pick the Sail this ACT checkout requires and put it first on PATH (ACT runs
+  # `sail_riscv_sim` from PATH). Called again after the checkout changes.
+  local required=""
+  if [[ -f "$act_root/framework/src/act/config.py" ]]; then
+    required="$(sed -n 's/^REQUIRED_SAIL_VERSION = "\([^"]*\)"/\1/p' "$act_root/framework/src/act/config.py")"
+  fi
+  sail_expected_version="${SAIL_VERSION_PIN:-${required:-$sail_expected_version}}"
+  [[ -n "$sail_expected_version" ]] || return 0
+  sail_bin="${SAIL_BIN_PIN:-$sail_root/riscv-sail-$sail_expected_version/bin/sail_riscv_sim}"
+  export PATH="$(dirname "$sail_bin"):$PATH"
+  if [[ -d "$state_root" ]]; then
+    printf '%s\n' "$sail_expected_version" > "$sail_version_file"
+  fi
+}
+select_sail
 act_config="${ACT_CONFIG_PATH:-config/cores/sifive_u74/test_config.local.yaml}"
 dut_yaml_relative="${ACT_DUT_YAML_PATH:-config/cores/sifive_u74/visionfive2-rv64gc.yaml}"
 sail_json_relative="${ACT_SAIL_JSON_PATH:-config/cores/sifive_u74/sail.json}"
@@ -199,7 +221,11 @@ case "$stage" in
     command -v zip
     command -v curl
     command -v riscv64-unknown-elf-gcc
-    test -x "$sail_bin"
+    select_sail
+    test -x "$sail_bin" || {
+      echo "Sail $sail_expected_version, which this ACT checkout requires, is not installed at $sail_bin" >&2
+      exit 1
+    }
     resolved_sail="$(command -v sail_riscv_sim)"
     if [[ "$(readlink -f "$resolved_sail")" != "$(readlink -f "$sail_bin")" ]]; then
       echo "Jenkins PATH resolves Sail to $resolved_sail, expected $sail_bin" >&2

@@ -82,7 +82,7 @@ case "$stage" in
       echo "completed_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       echo "runner_commit=$runner_commit"
       echo "git_head=$runner_commit"
-      echo "sail_version=${SAIL_EXPECTED_VERSION:-unknown}"
+      echo "sail_version=$(cat "$state_root/sail_version.txt" 2>/dev/null || echo "${SAIL_EXPECTED_VERSION:-unknown}")"
       echo "transport=uart_stream"
       echo "board=$uart_board"
       echo "runner_board_identity=$uart_expected_board"

@@ -39,7 +39,7 @@ class SailTraceTests(unittest.TestCase):
             return [(0x90000000, "rvtest_entry_point"), (0x90000168, "Check_cg_cp_x_bin")]
         return [(0x90000000, "rvtest_entry_point"), (0x90000168, "Check_cg_cp_x_bin")]
 
-    def _trace(self, sig_elf, config, work):
+    def _trace(self, sig_elf, config, work, version=""):
         path = work / "trace.txt"
         path.write_text(TRACE)
         return path
@@ -79,3 +79,18 @@ class SailTraceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SailVersionTests(unittest.TestCase):
+    def test_the_version_that_built_the_run_is_preferred(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for version in ("0.14.1", "0.15"):
+                binary = root / f"riscv-sail-{version}" / "bin" / "sail_riscv_sim"
+                binary.parent.mkdir(parents=True)
+                binary.write_text("#!/bin/sh\n")
+                binary.chmod(0o755)
+            with mock.patch.object(sail_trace, "SAIL_ROOTS", (str(root),)), \
+                    mock.patch.dict("os.environ", {"TRIAGE_SAIL": ""}):
+                self.assertIn("riscv-sail-0.15", sail_trace.sail_binary("0.15"))
+                self.assertIn("riscv-sail-0.14.1", sail_trace.sail_binary(""))

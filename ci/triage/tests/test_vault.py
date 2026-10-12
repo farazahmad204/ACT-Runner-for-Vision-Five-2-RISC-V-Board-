@@ -33,9 +33,14 @@ class RepositoryVaultTests(unittest.TestCase):
     def test_every_issue_note_is_well_formed_and_links_resolve(self):
         notes = vault.load_notes(vault.DEFAULT_VAULT)
         ids = {n["id"] for n in notes}
-        self.assertGreaterEqual(len(notes), 29)
+        self.assertGreaterEqual(len(notes), 40)
         for n in notes:
             self.assertEqual(Path(n["_path"]).stem, n["id"])
+            self.assertIn(n["verdict"], VERDICTS, n["id"])
+            if n["_path"].startswith("verifications/"):
+                for section in ("experiment", "result", "conclusion"):
+                    self.assertTrue(n["_sections"].get(section), (n["id"], section))
+                continue
             self.assertIn(n["verdict"], VERDICTS, n["id"])
             self.assertTrue(n["url"].startswith("https://github.com/riscv/"), n["id"])
             for section in ("what fails", "what the maintainers concluded", "how triage treats a match"):

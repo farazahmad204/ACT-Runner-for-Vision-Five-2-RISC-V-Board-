@@ -47,6 +47,7 @@ stored in memory; only a person's verdict outranks the note):
    verdict in memory outranks a note. Notes are read each run, so editing one takes effect at
    once; `tools/sync_issue_notes.py` updates their GitHub state from the team's issue sheet
    and adds stubs for new issues. See `obsidian-vault/README.md`.
+   The vault also holds Verification Agent results (`verifications/`), matched the same way.
 3. **Board rules** (`agent.py`, 0 tokens) from `board_knowledge/<board>.yaml`, which holds
    only measured or documented facts: access to a CSR the core does not implement, a CSR
    read-back that equals the written value masked by the measured writable bits, and
@@ -77,6 +78,10 @@ Each AI question is grounded, every part small and best effort:
 - **Spec text**: the two most relevant passages of the ratified privileged spec, from
   `knowledge/priv_spec_chunks.json.gz` (riscv-isa-manual, CC-BY-4.0; rebuild with
   `tools/build_spec_index.py`), ranked by the failure's CSRs, fields and terms.
+- **Similar ACT issues**: the two riscv-arch-test issues (of all 645, open and closed, in
+  `knowledge/act_issues.json.gz`; refresh with `tools/build_issue_index.py --cache DIR`) that
+  name the same test or family, or share two rare identifiers (CSR, field, coverpoint names)
+  with the failure. Issues already matched as vault notes are not repeated.
 - **Declared ISA**: the extensions the board's ACT config declares (`act_config` in
   `board_knowledge/<board>.yaml`) with its DEVIATION notes.
 

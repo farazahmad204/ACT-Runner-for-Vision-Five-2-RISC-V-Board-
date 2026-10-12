@@ -123,14 +123,23 @@ def link(note: dict[str, Any]) -> str:
 
 def analysis(note: dict[str, Any]) -> dict[str, Any]:
     s = note["_sections"]
-    status = note.get("state") or "unknown"
+    if note.get("outcome"):  # a Verification Agent note: experiment, result, conclusion
+        origin = f"Verified finding {link(note)} ({note['outcome']}, {note.get('date', '')}): "
+        reason = s.get("result") or s.get("summary", "")
+        root = s.get("conclusion") or s.get("summary", "")
+        step = s.get("conclusion") or "See the verification note."
+    else:
+        origin = (f"Known issue {link(note)} ({note.get('state') or 'unknown'}, "
+                  f"{note.get('resolution', 'unresolved')}): ")
+        reason = s.get("what fails") or s.get("summary") or note.get("title", "")
+        root = s.get("what the maintainers concluded") or s.get("summary", "")
+        step = s.get("how triage treats a match") or "See the linked issue."
     return {
         "category": f"known_issue:{note.get('cause', 'unknown')}",
-        "failure_reason": (s.get("what fails") or s.get("summary") or note.get("title", ""))[:400],
-        "root_cause": (f"Known issue {link(note)} ({status}, {note.get('resolution', 'unresolved')}): "
-                       + (s.get("what the maintainers concluded") or s.get("summary", ""))[:500]),
+        "failure_reason": reason[:400],
+        "root_cause": origin + root[:500],
         "confidence": "high",
-        "next_step": (s.get("how triage treats a match") or "See the linked issue.")[:300],
+        "next_step": step[:300],
         "verdict": str(note.get("verdict") or "Needs investigation"),
         "known_issue": note["id"],
     }
@@ -141,6 +150,10 @@ def context_lines(notes: list[dict[str, Any]], limit: int = 2) -> list[str]:
     lines = []
     for note in notes[:limit]:
         s = note["_sections"]
+        if note.get("outcome"):
+            lines.append(f"{note['id']} (verification, {note['outcome']}): {s.get('summary', '')[:260]} "
+                         f"Conclusion: {s.get('conclusion', '')[:260]}")
+            continue
         lines.append(f"{note['id']} ({note.get('state', '?')}, {note.get('resolution', '?')}, "
                      f"cause {note.get('cause', '?')}): {s.get('summary', '')[:260]} "
                      f"Maintainers: {s.get('what the maintainers concluded', '')[:260]}")

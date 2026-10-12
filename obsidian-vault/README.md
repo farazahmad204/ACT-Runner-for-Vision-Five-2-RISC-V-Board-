@@ -6,7 +6,7 @@ can read and edit it and the agent can match it against new failures.
 
 | Folder | Holds | Written by |
 |---|---|---|
-| `issues/` | One note per reported ACT/Sail issue (the "Reported ACT/Sail Issues" sheet) | `ci/triage/tools/sync_issue_notes.py`, then curated by a person |
+| `issues/` | One note per reported ACT/Sail issue that applies to our boards: the team's "Reported ACT/Sail Issues" sheet, plus riscv-arch-test issues picked from all 645 (2026-10-09) | `ci/triage/tools/sync_issue_notes.py`, then curated by a person |
 | `verifications/` | One note per experiment that confirmed or ruled out a root cause | The Verification Agent or a person, from `templates/verification.md` |
 | `boards/` | Per-board overview linking the notes that apply | People |
 | `templates/` | Note templates (never matched) | People |
@@ -25,6 +25,11 @@ For every failed test (`ci/triage/vault.py`):
 
 Notes are read on every run and not copied into the SQLite memory, so editing a note
 takes effect on the next triage.
+
+Every riscv-arch-test issue, open or closed, is also in `ci/triage/knowledge/act_issues.json.gz`
+(`ci/triage/tools/build_issue_index.py`). For each AI question the agent adds the two issues
+that name the same test or family, or share at least two rare identifiers (CSR, field,
+coverpoint names) with the failure. Curate a vault note when an issue keeps coming up.
 
 ## Frontmatter
 
@@ -57,4 +62,7 @@ python3 ci/triage/tools/sync_issue_notes.py             # update states, add stu
 
 New issues arrive as stubs (`curated: false`, no tests or signals). A person (or an
 agent, reviewed like code) reads the thread and fills in the frontmatter and sections.
-Set `auto: true` only when the board and test names alone identify the issue.
+Set `auto: true` only when the board, the test names and the signals identify the issue; check
+it against real failures first (a known test can fail for a different reason, as Sm_mcsr_cntr-00
+did on VF2 weekly #6). Signals are matched against the extracted fields and the value diff (for
+example `"extensions": ["h"]` when the differing CSR fields belong to H), never the whole log.

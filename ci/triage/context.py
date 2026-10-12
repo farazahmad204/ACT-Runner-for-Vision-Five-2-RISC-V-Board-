@@ -210,3 +210,93 @@ def declared_isa(knowledge: dict[str, Any]) -> str:
     if deviations:
         text += ". Deviations: " + " | ".join(dict.fromkeys(deviations))
     return text[:900]
+
+
+# ---------- reported riscv-arch-test issues ----------
+
+ISSUE_INDEX = Path(__file__).resolve().parent / "knowledge" / "act_issues.json.gz"
+
+
+@lru_cache(maxsize=1)
+def _issues() -> tuple[list[dict[str, Any]], dict[str, float]]:
+    if not ISSUE_INDEX.is_file():
+        return [], {}
+    with gzip.open(ISSUE_INDEX, "rt", encoding="utf-8") as stream:
+        issues = json.load(stream)["issues"]
+    df: Counter[str] = Counter()
+    for issue in issues:
+        issue["_words"] = Counter(WORD.findall((issue["title"] + " " + issue["text"]).lower()))
+        df.update(issue["_words"].keys())
+    idf = {w: math.log(len(issues) / (1 + n)) for w, n in df.items()}
+    return issues, idf
+
+
+def _family(test: str) -> str:
+    """Test family: 'Sv_sv39_canonical_Smode-00' -> 'sv_sv39_canonical'."""
+    return re.sub(r"(?:_[smu]mode)?(?:-\d{2})?$", "", test, flags=re.I).lower()
+
+
+def _same_family(a: str, b: str) -> bool:
+    """Older runs drop the category prefix ('sv39_canonical' vs 'sv_sv39_canonical')."""
+    short, long_ = sorted((a, b), key=len)
+    return len(short) >= 6 and (long_ == short or long_.endswith("_" + short))
+
+
+IDENT = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+|[a-z]+[0-9][a-z0-9]*")
+
+
+def issue_terms(evidence: dict[str, Any]) -> list[str]:
+    """Identifiers that name what failed: CSR and field names, coverpoint and bin names
+    ('cp_satp_access', 'mstatus_csrrw1'). Prose from hints matches every issue, so it is left out."""
+    ex = evidence.get("extracted", {})
+    vd = evidence.get("value_diff") or {}
+    words = {str(vd.get("csr", "")).lower()}
+    for field in (vd.get("extra_fields") or []) + (vd.get("missing_fields") or []):
+        words.add(str(field.get("field", "")).lower())
+    info = " ".join(str(ex.get(k, "")) for k in ("test_info", "damo_assert", "mismatching_field"))
+    for token in IDENT.findall(info.lower()):
+        words.add(token)
+        words.update(part for part in token.split("_") if len(part) > 3)  # mstatus_csrrw1 -> mstatus
+    return sorted(w for w in words if len(w) > 2 and w not in STOP)
+
+
+def related_issues(test: str, terms: list[str], exclude: set[str] = frozenset(),
+                   limit: int = 2, width: int = 420) -> list[str]:
+    """Reported riscv-arch-test issues most like this failure: the same test or test family
+    first, then shared distinctive terms. Context for the AI, never an answer by itself."""
+    issues, idf = _issues()
+    if not issues:
+        return []
+    family = _family(test)
+    best = []
+    for issue in issues:
+        if f"ACT-{issue['n']}" in exclude:
+            continue
+        named = [t.lower() for t in issue["tests"]]
+        score = 0.0
+        same_test = True
+        if test.lower() in named or any(t.endswith("_" + test.lower()) for t in named):
+            score += 12
+        elif family and any(_same_family(_family(t), family) for t in named):
+            score += 6
+        else:
+            same_test = False
+        words = issue["_words"]
+        shared = [t for t in terms if words.get(t) and idf.get(t, 0) > 2.0]
+        score += sum((1 + math.log(words[t])) * idf[t] for t in shared) / 3
+        # Without the same test or family, it takes at least two rare shared identifiers.
+        if score < 6 or (not same_test and len(shared) < 2):
+            continue
+        if issue["created"] < "2025-01-01":  # before ACT 4: different framework and tests
+            score *= 0.5
+        best.append((score, issue))
+    best.sort(key=lambda item: -item[0])
+    out = []
+    for _score, issue in best[:limit]:
+        status = issue["state"] + (f"/{issue['reason']}" if issue["reason"] else "")
+        prs = f"; PRs {', '.join('#' + str(p) for p in issue['prs'][:4])}" if issue["prs"] else ""
+        text = issue["text"]
+        # The opening report and the final comment carry the most: keep both ends.
+        excerpt = text if len(text) <= width else text[: width // 2] + " … " + text[-width // 2:]
+        out.append(f"ACT#{issue['n']} ({status}{prs}) {issue['title'][:100]}: {excerpt}")
+    return out

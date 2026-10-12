@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -64,3 +65,53 @@ class ContextTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RelatedIssueTests(unittest.TestCase):
+    def setUp(self):
+        import gzip
+        from ci.triage import context
+        self.context = context
+        self.tmp = tempfile.TemporaryDirectory()
+        index = Path(self.tmp.name) / "issues.json.gz"
+        issues = [
+            {"n": 10, "title": "Sv_sv39_canonical_Umode-00 stval differs", "state": "open", "reason": "",
+             "labels": [], "created": "2026-01-02", "closed": "", "prs": [12],
+             "tests": ["Sv_sv39_canonical_Umode-00"], "text": "stval holds a converted address"},
+            {"n": 11, "title": "pmp question", "state": "closed", "reason": "completed", "labels": [],
+             "created": "2026-01-02", "closed": "", "prs": [], "tests": [], "text": "pmpcfg lock"},
+        ]
+        with gzip.open(index, "wt") as stream:
+            json.dump({"issues": issues}, stream)
+        self.patch = mock.patch.object(context, "ISSUE_INDEX", index)
+        self.patch.start()
+        context._issues.cache_clear()
+
+    def tearDown(self):
+        self.patch.stop()
+        self.context._issues.cache_clear()
+        self.tmp.cleanup()
+
+    def test_same_test_family_ranks_first_and_unrelated_issues_are_left_out(self):
+        found = self.context.related_issues("Sv_sv39_canonical_Smode-00", ["stval"])
+        self.assertEqual(len(found), 1)
+        self.assertTrue(found[0].startswith("ACT#10 (open; PRs #12)"))
+
+    def test_names_without_the_category_prefix_still_match(self):
+        self.assertTrue(self.context.related_issues("sv39_canonical_Smode", [])[0].startswith("ACT#10"))
+
+    def test_issues_already_in_the_vault_are_excluded(self):
+        self.assertEqual(self.context.related_issues("Sv_sv39_canonical_Smode-00", ["stval"],
+                                                     exclude={"ACT-10"}), [])
+
+
+class IssueTermTests(unittest.TestCase):
+    def test_identifiers_not_prose(self):
+        evidence = {"extracted": {"test_info": "test: 437; cg: Sv_cg; cp: cp_satp_access; bin: s_csrs",
+                                  "hint": "Vector+Mode word mismatch may indicate incorrect fields"},
+                    "value_diff": {"csr": "satp", "missing_fields": [{"field": "ASID"}]}}
+        terms = context.issue_terms(evidence)
+        self.assertIn("cp_satp_access", terms)
+        self.assertIn("satp", terms)
+        self.assertIn("asid", terms)
+        self.assertNotIn("incorrect", terms)

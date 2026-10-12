@@ -150,8 +150,7 @@ def rule_analysis(evidence: dict[str, Any], log_text: str, knowledge: dict[str, 
             }
 
     # 3. A value-diff mechanism the values alone prove.
-    vd = value_diff.analyze(log_text, evidence.get("case", ""), {
-        "medeleg_mask": masks.get("medeleg")} if masks.get("medeleg") is not None else {})
+    vd = attach_value_diff(evidence, log_text, knowledge)
     hyp = vd.get("hypothesis") or {}
     if hyp.get("explains_observation") and hyp.get("pattern") in value_diff.CLOSABLE:
         return {
@@ -161,11 +160,21 @@ def rule_analysis(evidence: dict[str, Any], log_text: str, knowledge: dict[str, 
             "confidence": "high",
             "next_step": hyp.get("closure") or "Fix the board config value named above and rerun.",
         }
+    return None
+
+
+def attach_value_diff(evidence: dict[str, Any], log_text: str, knowledge: dict[str, Any]) -> dict[str, Any]:
+    """Which CSR fields differ between expected and observed; stored in evidence["value_diff"]
+    (the vault matches on it, the AI reads it). Returns the full analysis."""
+    masks = knowledge.get("writable_masks") or {}
+    vd = value_diff.analyze(log_text, evidence.get("case", ""), {
+        "medeleg_mask": masks.get("medeleg")} if masks.get("medeleg") is not None else {})
+    hyp = vd.get("hypothesis") or {}
     evidence["value_diff"] = {k: vd.get(k) for k in ("csr", "expected", "actual", "extra_fields",
                                                      "missing_fields") if vd.get(k)}
     if hyp:
         evidence["value_diff"]["hypothesis"] = hyp.get("root_cause", "")[:300]
-    return None
+    return vd
 
 
 # ---------- enrichment: what the AI gets beyond the log ----------
@@ -257,6 +266,9 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
     if g.get("known_issues"):
         parts.append(cap("Reported issues that may match (from the team's issue notes; verify they "
                          "apply before citing):\n" + "\n".join(g["known_issues"]), 1100))
+    if g.get("issues"):
+        parts.append(cap("Similar riscv-arch-test issues (open or closed; check they apply, cite "
+                         "as ACT#N):\n" + "\n".join(g["issues"]), 1000))
     if related:
         parts.append(cap("Past findings for the same category (context, may differ):\n"
                          + "\n".join(related), 700))

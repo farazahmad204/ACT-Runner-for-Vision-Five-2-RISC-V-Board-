@@ -353,8 +353,10 @@ def build(run_root: Path, case: str, extracted: dict[str, Any], address: int | N
     if inst and (folder / "test.sig.elf").is_file() and config.is_file():
         csrs = re.findall(r"\bcsrr[sciw]i?\s+[a-z0-9]+,\s*([a-z0-9]+)", inst.get("at", ""))
         text = re.match(r"^0x[0-9a-f]+:\s+[0-9a-f]+\s+(.*)$", inst.get("at", ""))
+        version = re.search(r"sail_version=(\S+)", act_revision(run_root))
         ref = sail_trace.reference(folder / "test.elf", folder / "test.sig.elf", config, address, csrs,
-                                   encoding=text.group(1) if text else "")
+                                   encoding=text.group(1) if text else "",
+                                   sail_version=version.group(1) if version else "")
         if ref:
             found["reference"] = ref
     revision = act_revision(run_root)

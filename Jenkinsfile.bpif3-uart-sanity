@@ -59,11 +59,9 @@ pipeline {
         LOCAL_TOOLS_SOURCE = '/data/ci/tools'
         LOCAL_TUYA_DEVICES_SOURCE = '/data/ci/devices.json'
         REGENERATE_TESTS = 'true'
-        SAIL_BIN = '/data/ci/toolchains/riscv-sail-0.14.1/bin/sail_riscv_sim'
-        SAIL_EXPECTED_VERSION = '0.14.1'
         INSTALLED_RUNNER_BUILD = "${params.INSTALLED_RUNNER_BUILD ?: ''}"
         UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'SCW1050'}"
-        PATH = '/data/ci/bin:/data/ci/toolchains/riscv64/bin:/data/ci/toolchains/riscv-sail-0.14.1/bin:/usr/local/bin:/usr/bin:/bin'
+        PATH = '/data/ci/bin:/data/ci/toolchains/riscv64/bin:/usr/local/bin:/usr/bin:/bin'
     }
 
     stages {

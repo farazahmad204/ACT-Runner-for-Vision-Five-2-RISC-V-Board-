@@ -29,8 +29,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-SAIL_CANDIDATES = ("/data/ci/toolchains/riscv-sail-0.14.1/bin/sail_riscv_sim",
-                   str(Path.home() / "riscv-sail-0.14.1" / "bin" / "sail_riscv_sim"))
+SAIL_ROOTS = ("/data/ci/toolchains", str(Path.home()))
+LEGACY_VERSION = "0.14.1"  # what built runs that do not record their Sail version
 TRACE_FLAGS = ["--trace-instr", "--trace-reg", "--trace-csr", "--trace-mem", "--trace-exception",
                "--trace-interrupt", "--use-abi-names"]
 INST_LIMIT = 3_000_000  # ACT tests retire far fewer; bounds the trace file
@@ -39,11 +39,15 @@ SYMBOL = re.compile(r"^([0-9a-fA-F]+) ([tT]) (\S+)$")
 MMIO_BELOW = 0x80000000  # board RAM starts at or above this on every supported board
 
 
-def sail_binary() -> str | None:
+def sail_binary(version: str = "") -> str | None:
+    """The Sail that built the run: riscv-sail-<version> beside the others (CI installs each
+    version side by side), else TRIAGE_SAIL or the one on PATH."""
     configured = os.environ.get("TRIAGE_SAIL", "")
     if configured.lower() in {"off", "no", "0"}:
         return None
-    for candidate in (configured, shutil.which("sail_riscv_sim") or "", *SAIL_CANDIDATES):
+    by_version = [str(Path(root) / f"riscv-sail-{version or LEGACY_VERSION}" / "bin" / "sail_riscv_sim")
+                  for root in SAIL_ROOTS]
+    for candidate in (configured, *by_version, shutil.which("sail_riscv_sim") or ""):
         if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
             return candidate
     return None
@@ -89,8 +93,8 @@ def map_pc(board_elf: Path, sig_elf: Path, pc: int) -> tuple[int, str] | None:
     return None
 
 
-def _run_sail(sig_elf: Path, config: Path, work: Path) -> Path | None:
-    sail = sail_binary()
+def _run_sail(sig_elf: Path, config: Path, work: Path, version: str = "") -> Path | None:
+    sail = sail_binary(version)
     if not sail:
         return None
     trace = work / "trace.txt"
@@ -141,7 +145,8 @@ def shape(disassembly: str) -> str:
 
 
 def reference(board_elf: Path, sig_elf: Path, config: Path, pc: int | None,
-              csrs: list[str] = (), before: int = 8, encoding: str = "") -> dict[str, Any]:
+              csrs: list[str] = (), before: int = 8, encoding: str = "",
+              sail_version: str = "") -> dict[str, Any]:
     """Sail's behavior at the board's failing instruction (see the module docstring). `csrs` are
     the CSRs the failing instruction accesses; writes to them and their aliases count as setup."""
     if not pc or not board_elf.is_file() or not sig_elf.is_file() or not config.is_file():
@@ -161,7 +166,7 @@ def reference(board_elf: Path, sig_elf: Path, config: Path, pc: int | None,
     wanted = f"]: 0x{target:016X} ("
     found: dict[str, Any] = {"label": label, "sig_pc": f"{target:#x}"}
     with tempfile.TemporaryDirectory(prefix="triage-sail-") as work:
-        trace = _run_sail(sig_elf, config, Path(work))
+        trace = _run_sail(sig_elf, config, Path(work), sail_version)
         if not trace:
             return {}
         recent: deque[str] = deque(maxlen=400)

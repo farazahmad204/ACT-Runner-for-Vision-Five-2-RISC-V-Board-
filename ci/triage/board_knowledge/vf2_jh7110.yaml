@@ -3,3 +3,9 @@ board: vf2_jh7110
 facts:
   - "StarFive JH7110 with SiFive U74 cores (RV64GC); the U74 has no hypervisor extension."
 act_config: config/cores/sifive_u74/visionfive2-rv64gc.yaml
+# Specification versions this board implements (ids in knowledge/spec_versions.json.gz). Triage
+# checks behavior against these first, and shows the current ratified text only for comparison.
+spec_versions:
+  priv: priv-1.11
+  unpriv: unpriv-20190608
+  source: "SiFive U74 core: privileged ISA 1.11 (U74 manual); the board's ACT sail.json also declares Privileged_ISA_1_11. No hypervisor extension."

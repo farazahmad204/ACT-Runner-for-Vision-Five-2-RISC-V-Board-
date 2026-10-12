@@ -24,3 +24,9 @@ writable_masks:
   hgeie: 0x0
 # The board's ACT config inside the ACT checkout: its declared extensions go to the AI.
 act_config: config/cores/milkv_megrez/milkv-megrez-p550/milkv-megrez-p550.yaml
+# Specification versions this board implements (ids in knowledge/spec_versions.json.gz).
+spec_versions:
+  priv: priv-1.11
+  hypervisor: h-0.6
+  unpriv: unpriv-20190608
+  source: "EIC7700X TRM v1.0.0 Part 1, Table 3-5: privileged 1.11, hypervisor draft 0.6; OpenSBI reports Priv Version v1.11."

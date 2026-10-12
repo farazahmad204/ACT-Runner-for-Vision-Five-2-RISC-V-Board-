@@ -30,7 +30,10 @@ python3 "$here/collect_case_files.py" --run-root "$run_root" --state-root "$stat
 
 args=(--run-root "$run_root" --state-root "$state_root" --board "$board"
       --max-ai-failures "${AI_TRIAGE_MAX_FAILURES:-0}")
-if [[ "${REFRESH_MEMORY:-false}" == true ]]; then
+if [[ "${TRIAGE_BLIND:-false}" == true ]]; then
+  args+=(--blind)
+  echo "Triage: blind (no vault notes, no memory) for accuracy scoring"
+elif [[ "${REFRESH_MEMORY:-false}" == true ]]; then
   args+=(--refresh-memory)
   echo "Triage memory: refresh (earlier rule and AI answers are not reused)"
 fi

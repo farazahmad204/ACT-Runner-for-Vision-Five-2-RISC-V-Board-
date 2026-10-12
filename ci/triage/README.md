@@ -92,6 +92,26 @@ From these, each failure gets a `casefile.json`:
   the test requires, and what decides its trap cause (misaligned priority, PMP, memory map,
   CLINT/PLIC for interrupts).
 
+## How accurate it is (`evaluate.py`)
+
+Run `riscv-uart-triage` with `EVALUATE=true` for a retained build. It triages the build **blind**
+(no vault notes, no memory; spec text, the ACT issue index and board rules stay), so the agent
+works every failure out itself, then scores the result against an answer key, per failure:
+
+1. the Verdict a person set in the portal for that build;
+2. a person's Verdict for the same test in another build of the board (reported separately);
+3. a verified vault note that resolves the failure (it also gives the root-cause class).
+
+Nothing is published to the portal. The job archives `accuracy.md` and `accuracy.json`, shows
+the headline in the build description, and appends to `/data/ci/agent/triage-evals/history.jsonl`
+(`tools/accuracy_history.py` prints the trend). Scores: root-cause accuracy (class where the key
+has one, else verdict), verdict agreement, hardware-bug false alarms (must stay 0), missed
+hardware bugs, accuracy by confidence, spec-quote checks, and every disagreement with its key.
+
+Run it after changing the agent or its knowledge; the key grows as people set Verdicts in the
+portal and as verified notes are added to the vault. A failure the vault answers is a
+fair test only in a blind run: otherwise the agent would just repeat the note.
+
 ## What the reference model did (`sail_trace.py`)
 
 The ELF that ran on the board carries the board's boot and interrupt macro code, which Sail does

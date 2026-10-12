@@ -655,6 +655,7 @@ def run_triage(
     ai_analyzer: Callable[[str, AIConfig, str], tuple[str, dict[str, Any]]] | None = None,
     memory_path: str | Path | None = None,
     refresh_memory: bool = False,
+    blind: bool = False,
 ) -> dict[str, Any]:
     """Triage every failure, cheapest first: a person's verdict in memory, a known-issue note in
     the vault, other memory, board rules, then one AI call per signature cluster.
@@ -676,9 +677,11 @@ def run_triage(
     per_case = out_root / "per_case"
     per_case.mkdir(parents=True, exist_ok=True)
 
-    memory = TriageMemory(memory_path)
+    # Blind (for evaluate.py): no vault notes and an empty memory, so every failure is worked
+    # out from the evidence, spec and board facts alone and can be scored against them.
+    memory = TriageMemory(":memory:" if blind else memory_path)
     knowledge = load_knowledge(board)
-    notes = vault.load_notes()
+    notes = [] if blind else vault.load_notes()
     elfs = elf_index(run_root)
     run_label = run_root.name
     records: list[dict[str, Any]] = []
@@ -859,6 +862,7 @@ def run_triage(
         "ai_calls": ai_calls,
         "resolved": counts,
         "memory_db": memory.path,
+        "blind": blind,
         "vault": str(vault.vault_root()),
         "results": results,
     }

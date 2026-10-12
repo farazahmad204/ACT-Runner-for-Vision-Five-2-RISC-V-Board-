@@ -37,6 +37,8 @@ pipeline {
             description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
         booleanParam(name: 'REFRESH_MEMORY', defaultValue: false,
             description: 'Analyze every failure again instead of reusing earlier rule and AI answers from the triage memory (for example after the triage agent or its knowledge changed). Verdicts people set in the portal are still used. Costs one AI call per failure signature.')
+        booleanParam(name: 'EVALUATE', defaultValue: false,
+            description: 'Measure the triage agent instead of publishing: triage this build blind (no vault notes, no memory), score it against the Verdicts people set in the portal and the verified vault notes, and archive accuracy.md. Nothing is sent to the portal.')
         booleanParam(name: 'PUBLISH_TO_PORTAL', defaultValue: true,
             description: 'Fill the triage columns of the existing run in the portal workbook.')
         string(name: 'PORTAL_CREDENTIAL_ID', defaultValue: 'riscv-portal-ingest-token',
@@ -132,7 +134,8 @@ PY
                           megrez-*) board=milkv_megrez_eic7700x ;;
                           *) board=vf2_jh7110 ;;
                         esac
-                        ci/triage/jenkins_triage.sh input state "$board"
+                        echo "$board" > board.txt
+                        TRIAGE_BLIND="$EVALUATE" ci/triage/jenkins_triage.sh input state "$board"
                     '''
                     if (params.RUN_AI_TRIAGE && params.AI_TRIAGE_PROVIDER == 'openai') {
                         withCredentials([string(credentialsId: params.AI_TRIAGE_CREDENTIAL_ID,
@@ -146,8 +149,28 @@ PY
             }
         }
 
+        stage('Evaluate Accuracy') {
+            when { expression { return params.EVALUATE } }
+            steps {
+                withCredentials([string(credentialsId: params.PORTAL_CREDENTIAL_ID,
+                                        variable: 'PORTAL_INGEST_TOKEN')]) {
+                    sh '''#!/usr/bin/env bash
+                        set -euo pipefail
+                        python3 ci/triage/evaluate.py \
+                          --run-root input \
+                          --board "$(cat board.txt)" \
+                          --job "$SOURCE_JOB" \
+                          --build "$SOURCE_BUILD_NUMBER" \
+                          --portal-url 'https://apollo/portal/' \
+                          --ca-file /data/ci/agent/jenkins-internal-ca.crt \
+                          --history /data/ci/agent/triage-evals/history.jsonl
+                    '''
+                }
+            }
+        }
+
         stage('Update Existing Portal Run') {
-            when { expression { return params.PUBLISH_TO_PORTAL } }
+            when { expression { return params.PUBLISH_TO_PORTAL && !params.EVALUATE } }
             steps {
                 withCredentials([string(credentialsId: params.PORTAL_CREDENTIAL_ID,
                                         variable: 'PORTAL_INGEST_TOKEN')]) {
@@ -179,7 +202,12 @@ PY
                 if (fileExists('portal_url.txt')) {
                     portalUrl = readFile('portal_url.txt').trim()
                 }
-                currentBuild.description = "Source: <a href=\"${sourceUrl}\">${params.SOURCE_JOB} #${params.SOURCE_BUILD_NUMBER}</a> | <a href=\"${reportUrl}\">Triage report</a>" + (portalUrl ? " | <a href=\"${portalUrl}\">Portal run</a>" : "")
+                def accuracy = ""
+                if (fileExists('input/triage/accuracy.txt')) {
+                    accuracy = " | <a href=\"${env.BUILD_URL}artifact/input/triage/accuracy.md\">Accuracy</a>: " +
+                        readFile('input/triage/accuracy.txt').trim()
+                }
+                currentBuild.description = "Source: <a href=\"${sourceUrl}\">${params.SOURCE_JOB} #${params.SOURCE_BUILD_NUMBER}</a> | <a href=\"${reportUrl}\">Triage report</a>" + (portalUrl ? " | <a href=\"${portalUrl}\">Portal run</a>" : "") + accuracy
             }
         }
     }

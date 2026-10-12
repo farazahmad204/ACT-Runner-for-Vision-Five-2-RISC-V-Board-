@@ -13,6 +13,8 @@ from ci_triage import AI_PROVIDERS, AIConfig, run_triage
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--blind", action="store_true",
+                        help="no vault notes and no memory: for scoring with evaluate.py")
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--board", required=True)
     parser.add_argument("--ai", action="store_true", help="enable advisory AI analysis")
@@ -69,6 +71,7 @@ def main() -> int:
         max_ai_failures=args.max_ai_failures,
         memory_path=args.memory or None,
         refresh_memory=args.refresh_memory,
+        blind=args.blind,
     )
     print(
         "ACT CI triage: "

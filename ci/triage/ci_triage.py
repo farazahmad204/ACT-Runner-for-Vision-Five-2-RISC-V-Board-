@@ -19,8 +19,8 @@ from typing import Any, Callable
 
 try:
     from .agent import (
-        attach_value_diff, check_answer, compact_prompt, disassembly, elf_index, failing_address,
-        failure_signature, load_knowledge, rule_analysis,
+        CLASSES, attach_value_diff, check_answer, compact_prompt, disassembly, elf_index,
+        failing_address, failure_signature, load_knowledge, rule_analysis, suggested_verdict,
     )
     from .context import (
         declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
@@ -33,8 +33,8 @@ except ImportError:  # run as a script from ci/triage
         declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
     )
     from agent import (  # type: ignore[no-redef]
-        attach_value_diff, check_answer, compact_prompt, disassembly, elf_index, failing_address,
-        failure_signature, load_knowledge, rule_analysis,
+        CLASSES, attach_value_diff, check_answer, compact_prompt, disassembly, elf_index,
+        failing_address, failure_signature, load_knowledge, rule_analysis, suggested_verdict,
     )
     from memory import TriageMemory  # type: ignore[no-redef]
     import casefile  # type: ignore[no-redef]
@@ -105,9 +105,13 @@ class AIConfig:
 AI_ANSWER_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["failure_reason", "root_cause", "confidence", "next_step", "spec_version",
-                 "spec_quote"],
+    "required": ["classification", "failure_reason", "root_cause", "confidence", "next_step",
+                 "spec_version", "spec_quote"],
     "properties": {
+        "classification": {"type": "string", "enum": [
+            "DUT noncompliance", "Unsupported feature", "Test issue", "Firmware issue",
+            "Reference-model mismatch", "Implementation-defined behavior", "Environment issue",
+            "Inconclusive"]},
         "failure_reason": {"type": "string"},
         "root_cause": {"type": "string"},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
@@ -558,6 +562,83 @@ def analysis_report(analysis: dict[str, Any], source: str) -> str:
     return "\n".join([body, *extra])
 
 
+def workbook_verdict(record: dict[str, Any]) -> str:
+    """The Verdict the workbook gets: a known one (person, vault note, board rule), or the AI's
+    suggestion when it is confident and not a hardware-bug claim (a person confirms those)."""
+    analysis = record.get("analysis") or {}
+    if analysis.get("verdict"):
+        return str(analysis["verdict"])
+    klass = analysis.get("classification", "")
+    if analysis.get("confidence") == "high" and klass not in ("DUT noncompliance", "Inconclusive", ""):
+        return suggested_verdict(klass)
+    return ""
+
+
+def _trap(ex: dict[str, Any]) -> dict[str, Any]:
+    cause = ex.get("xcause") or ex.get("trap_mcause") or ex.get("mcause") or ""
+    names = spec_index.cause_words(cause)
+    return {k: v for k, v in {
+        "cause": cause,
+        "cause_name": " ".join(w for w in names if w != "priority"),
+        "epc": ex.get("xepc") or ex.get("trap_mepc") or ex.get("mepc") or "",
+        "tval": ex.get("xtval") or ex.get("trap_mtval") or ex.get("mtval") or "",
+        "handled_in": ex.get("trap_handler_mode") or "",
+    }.items() if v}
+
+
+def build_report(record: dict[str, Any], board_versions: dict[str, str]) -> dict[str, Any]:
+    """Everything a person needs to review one failure, in the order of the analysis: what
+    failed, the failing instruction, what the test does there, expected vs observed, what the
+    board's spec version says, the root-cause class and what to do."""
+    analysis = record.get("analysis") or {}
+    evidence = record["evidence"]
+    ex = evidence.get("extracted", {})
+    case = record.get("casefile") or {}
+    comparisons = []
+    if ex.get("expected_value") or ex.get("actual_value"):
+        comparisons.append({"what": ex.get("mismatching_field") or "Signature value",
+                            "expected": ex.get("expected_value", ""), "observed": ex.get("actual_value", "")})
+    if ex.get("register_expected") or ex.get("register_value"):
+        comparisons.append({"what": f"{ex.get('register') or 'Register'} after the check",
+                            "expected": ex.get("register_expected", ""), "observed": ex.get("register_value", "")})
+    diff = evidence.get("value_diff") or {}
+    fields = [f"{f.get('field')} ({'missing' if f in (diff.get('missing_fields') or []) else 'extra'})"
+              for f in (diff.get("missing_fields") or []) + (diff.get("extra_fields") or [])]
+    known = analysis.get("known_issue")
+    note = next((n for n in record.get("known_issues") or [] if n.get("id") == known), None)
+    klass = analysis.get("classification") or "Inconclusive"
+    return {
+        "test": evidence["case"],
+        "status": evidence.get("hardware_status", ""),
+        "classification": klass if klass in CLASSES else "Inconclusive",
+        # A verdict the analysis already carries (person, vault note, board rule) wins.
+        "suggested_verdict": analysis.get("verdict") or suggested_verdict(klass),
+        "confidence": analysis.get("confidence", ""),
+        "explained_by": record.get("ai_status", ""),
+        "source": record.get("source", ""),
+        "failure_reason": analysis.get("failure_reason", ""),
+        "root_cause": analysis.get("root_cause", ""),
+        "next_step": analysis.get("next_step", ""),
+        "checked": analysis.get("checked", ""),
+        "failure": ex.get("failure") or ex.get("damo_assert") or "",
+        "check": ex.get("test_info", ""),
+        "instruction": case.get("instruction") or {},
+        "test_code": {k: v for k, v in (case.get("intent") or {}).items() if k in ("code", "header")},
+        "comparisons": comparisons,
+        "differing_fields": {"csr": diff.get("csr", ""), "fields": fields} if fields else {},
+        "trap": _trap(ex),
+        "spec": {"version": analysis.get("spec_version", ""),
+                 "label": spec_index.label(analysis.get("spec_version", "")),
+                 "quote": analysis.get("spec_quote", ""),
+                 "check": analysis.get("spec_check", "")} if analysis.get("spec_quote") else {},
+        "board_versions": board_versions,
+        "known_issue": {"id": known, "url": (note or {}).get("url", ""),
+                        "title": (note or {}).get("title", "")} if known else {},
+        "act_revision": case.get("act_revision", ""),
+        "signature": record.get("signature", ""),
+    }
+
+
 def run_triage(
     run_root: Path,
     state_root: Path,
@@ -639,6 +720,8 @@ def run_triage(
 
     ai_calls = 0
     board_isa = declared_isa(knowledge) if pending else ""
+    board_versions = {role: spec_index.label(vid)
+                      for role, vid in (knowledge.get("spec_versions") or {}).items() if role != "source"}
     for signature, members in pending.items():
         if not ai_enabled:
             continue
@@ -690,7 +773,8 @@ def run_triage(
         ai_calls += 1
         try:
             text, raw_response = analyzer(prompt, ai_config, api_key)
-            answer = check_answer(parse_answer(text), lead, spec_found.get("versions", {}))
+            answer = check_answer(parse_answer(text), lead, spec_found.get("versions", {}),
+                                  has_instruction=bool(case_file.get("instruction")))
             metadata = {key: raw_response.get(key) for key in
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
             metadata.update(prompt_chars=len(prompt), cluster_size=len(members),
@@ -722,6 +806,9 @@ def run_triage(
             (case_dir / "casefile.json").write_text(
                 json.dumps(record["casefile"], indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
+        report = build_report(record, board_versions)
+        (case_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
+                                              encoding="utf-8")
         if record["analysis"]:
             (case_dir / "ai_analysis.md").write_text(
                 analysis_report(record["analysis"], record["source"]).rstrip() + "\n", encoding="utf-8"
@@ -740,7 +827,9 @@ def run_triage(
                 "owner": evidence["deterministic_owner"],
                 "signature": record["signature"],
                 "analysis_source": record["source"],
-                "verdict": (record["analysis"] or {}).get("verdict", ""),
+                "verdict": workbook_verdict(record),
+                "classification": report["classification"],
+                "report": report,
                 "known_issues": [note["id"] for note in record.get("known_issues") or []],
                 "ai_status": record["ai_status"],
                 "ai_error": record["ai_error"],

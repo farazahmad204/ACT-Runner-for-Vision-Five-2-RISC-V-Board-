@@ -131,7 +131,26 @@ def resolves(note: dict[str, Any], board: str) -> bool:
 
 
 def link(note: dict[str, Any]) -> str:
-    return f"[[{note['id']}]]" + (f" {note['url']}" if note.get("url") else "")
+    return note["id"] + (f" {note['url']}" if note.get("url") else "")
+
+
+# A note's cause -> root-cause class, unless the note names its `classification`.
+CAUSE_CLASSES = {
+    "test-limitation": "Test issue", "framework-bug": "Test issue", "hardware-timing": "Test issue",
+    "reference-model": "Reference-model mismatch", "spec-version": "Unsupported feature",
+    "implementation-choice": "Implementation-defined behavior", "act-config": "Environment issue",
+}
+
+
+def _prose(text: str, limit: int) -> str:
+    """Note text for a report: Obsidian links as plain ids, cut at a sentence end."""
+    text = re.sub(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]", r"\1", text or "")
+    text = re.sub(r"\s*\n\s*-\s+", " • ", text.strip())
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= limit:
+        return text
+    cut = text.rfind(". ", 0, limit)
+    return text[: cut + 1] if cut > limit // 2 else text[:limit].rstrip() + "…"
 
 
 def analysis(note: dict[str, Any]) -> dict[str, Any]:
@@ -147,12 +166,14 @@ def analysis(note: dict[str, Any]) -> dict[str, Any]:
         reason = s.get("what fails") or s.get("summary") or note.get("title", "")
         root = s.get("what the maintainers concluded") or s.get("summary", "")
         step = s.get("how triage treats a match") or "See the linked issue."
+    klass = note.get("classification") or CAUSE_CLASSES.get(str(note.get("cause", "")), "Inconclusive")
     return {
+        "classification": klass,
         "category": f"known_issue:{note.get('cause', 'unknown')}",
-        "failure_reason": reason[:400],
-        "root_cause": origin + root[:500],
+        "failure_reason": _prose(reason, 700),
+        "root_cause": _prose(origin + root, 900),
         "confidence": "high",
-        "next_step": step[:300],
+        "next_step": _prose(step, 600),
         "verdict": str(note.get("verdict") or "Needs investigation"),
         "known_issue": note["id"],
     }

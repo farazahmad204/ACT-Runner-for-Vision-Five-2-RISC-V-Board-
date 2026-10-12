@@ -115,6 +115,7 @@ def rule_analysis(evidence: dict[str, Any], log_text: str, knowledge: dict[str, 
                 "confidence": "high",
                 "next_step": f"Mark as a known deviation, or guard the test for cores without {name}.",
                 "verdict": "Known deviation",
+                "classification": "Unsupported feature",
             }
     assert_text = str(ex.get("damo_assert") or "")
     for csr, name in absent.items():
@@ -127,6 +128,7 @@ def rule_analysis(evidence: dict[str, Any], log_text: str, knowledge: dict[str, 
                 "confidence": "medium",
                 "next_step": f"Mark as a known deviation, or skip the test on cores without {name}.",
                 "verdict": "Known deviation",
+                "classification": "Unsupported feature",
             }
 
     # 2. CSR read-back equals the written value masked by the measured writable bits.
@@ -149,6 +151,7 @@ def rule_analysis(evidence: dict[str, Any], log_text: str, knowledge: dict[str, 
                 "confidence": "high",
                 "next_step": "Compare with the H version the core implements; record as a known deviation "
                              "or fix the board config's writable mask.",
+                "classification": "Unsupported feature",
             }
 
     # 3. A value-diff mechanism the values alone prove.
@@ -161,6 +164,8 @@ def rule_analysis(evidence: dict[str, Any], log_text: str, knowledge: dict[str, 
             "root_cause": hyp["root_cause"],
             "confidence": "high",
             "next_step": hyp.get("closure") or "Fix the board config value named above and rerun.",
+            "classification": RULE_CLASSES.get(f"value_diff_{hyp['pattern']}",
+                                               "Implementation-defined behavior"),
         }
     return None
 
@@ -305,12 +310,11 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
         "confidence only when the evidence itself shows the mechanism (a read-back value, a trap "
         "cause); a likely explanation not shown by the values is medium. A reported issue applies only "
         "if its test, bin or values match this failure: if they differ, say so instead of citing it. "
-        "Causes "
-        "to choose from: hardware behavior, spec-version difference, ACT/test config, reference model, "
-        "runner/firmware, CI transport, insufficient evidence. Judge the hardware against the "
+        "Classify the root cause as exactly one of: " + CLASS_HELP + ". Judge the hardware against the "
         "specification versions the board implements, not the current text: if its version allows "
         "or requires the observed behavior, the test or reference expectation is wrong for this "
-        "board. Do not assume ACT, Sail or Spike are right. Answer as JSON: failure_reason (1-2 "
+        "board. Do not assume ACT, Sail or Spike are right. Answer as JSON: classification (one of "
+        "the classes, exact name), failure_reason (1-2 "
         "sentences, cite values), root_cause (1-3 sentences, who should act), confidence "
         "(high/medium/low), next_step (1 sentence), spec_version (the bracketed id of the passage "
         "you rely on, e.g. priv-1.11, or empty), spec_quote (10-40 words copied exactly from that "
@@ -324,6 +328,40 @@ NEGATION = re.compile(r"\b(?:not|no|nor|never|without|rather than|than|isn't|is 
                       r"[^.;]{0,40}$")
 
 
+# Root-cause classes every analysis ends in, and the workbook Verdict each suggests.
+CLASSES = {
+    "DUT noncompliance": "Confirmed hardware bug",  # suggested only; a person confirms it
+    "Unsupported feature": "Known deviation",
+    "Test issue": "Test or ACT issue",
+    "Firmware issue": "Runner or CI issue",
+    "Reference-model mismatch": "Reference model issue",
+    "Implementation-defined behavior": "Known deviation",
+    "Environment issue": "Runner or CI issue",
+    "Inconclusive": "Needs investigation",
+}
+CLASS_HELP = (
+    "DUT noncompliance (the hardware violates a mandatory requirement of a spec version it "
+    "implements); Unsupported feature (the test assumes an extension or version the board does not "
+    "implement); Test issue (the ACT test or its assumptions are wrong); Firmware issue (trap "
+    "handling, privilege transition, PMP, loader or runner error); Reference-model mismatch (Sail or "
+    "Spike, or their configuration for this board, differ from the applicable spec or the "
+    "implementation); Implementation-defined behavior (the spec permits more than one outcome); "
+    "Environment issue (memory layout, flashing, timing or test setup such as the board's ACT "
+    "macros); Inconclusive (the evidence cannot establish a root cause)"
+)
+# Board-rule and value-diff results, by mechanism.
+RULE_CLASSES = {
+    "absent_csr": "Unsupported feature",
+    "writable_mask": "Unsupported feature",
+    "value_diff_delegation_not_taken": "Reference-model mismatch",
+    "value_diff_priority_shows_as_delegation": "Reference-model mismatch",
+}
+
+
+def suggested_verdict(classification: str) -> str:
+    return CLASSES.get(classification, "Needs investigation")
+
+
 def claims_hardware_bug(text: str) -> bool:
     """True when the text asserts a hardware bug; 'not a demonstrated hardware bug' does not."""
     return any(not NEGATION.search(text[max(0, m.start() - 60):m.start()])
@@ -331,8 +369,10 @@ def claims_hardware_bug(text: str) -> bool:
 
 
 def check_answer(answer: dict[str, Any], rep: dict[str, Any],
-                 board_versions: dict[str, str] | None = None) -> dict[str, Any]:
-    """Downgrade confidence the evidence does not support."""
+                 board_versions: dict[str, str] | None = None,
+                 has_instruction: bool = False) -> dict[str, Any]:
+    """Downgrade confidence the evidence does not support, and hold each root-cause class to
+    what it needs."""
     ex = rep.get("extracted", {})
     text = f"{answer.get('root_cause', '')} {answer.get('failure_reason', '')}".lower()
     has_values = any(ex.get(k) for k in ("expected_value", "register_expected", "damo_assert",
@@ -370,6 +410,32 @@ def check_answer(answer: dict[str, Any], rep: dict[str, Any],
         answer["spec_check"] = "not_found"
         answer["confidence"] = {"high": "medium"}.get(answer.get("confidence"), "low")
         notes.append(f"the quoted spec text is not in {version or 'the named version'}")
+    # The class must be one of ours, and the strong ones must be earned.
+    klass = str(answer.get("classification") or "")
+    if klass not in CLASSES:
+        klass = "Inconclusive"
+        notes.append("no valid root-cause class given")
+    verified = answer.get("spec_check") == "verified"
+    if klass == "DUT noncompliance":
+        missing = [what for what, ok in (
+            ("the failing instruction", has_instruction or bool(ex.get("instruction"))),
+            ("expected and observed values", has_values),
+            ("a verified quote", verified),
+            ("a spec version the board implements",
+             not board_versions or version in board_versions.values()),
+        ) if not ok]
+        if missing:
+            klass = "Inconclusive"
+            answer["confidence"] = "low"
+            notes.append("DUT noncompliance needs " + ", ".join(missing) + "; kept as Inconclusive")
+    elif klass in ("Implementation-defined behavior", "Reference-model mismatch") and not verified:
+        if answer.get("confidence") == "high":
+            answer["confidence"] = "medium"
+        notes.append(f"{klass} without a verified spec quote")
+    elif klass == "Inconclusive":
+        answer["confidence"] = "low"
+    answer["classification"] = klass
+    answer["suggested_verdict"] = suggested_verdict(klass)
     if notes:
         answer["checked"] = "; ".join(notes)
     return answer

@@ -14,6 +14,7 @@ signals:
 - '"field": "ssip"'
 auto: true
 cause: act-config
+classification: Environment issue
 verdict: Test or ACT issue
 evidence:
 - riscv-uart-triage re-triage of vf2-uart-weekly #6 (2026-10-12), per_case evidence.json

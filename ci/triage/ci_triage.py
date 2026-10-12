@@ -623,6 +623,10 @@ def build_report(record: dict[str, Any], board_versions: dict[str, str]) -> dict
         "failure": ex.get("failure") or ex.get("damo_assert") or "",
         "check": ex.get("test_info", ""),
         "instruction": case.get("instruction") or {},
+        "reference": {k: v for k, v in (case.get("reference") or {}).items()
+                      if k in ("executed", "label", "mode", "at", "result", "setup", "note")}
+                     | ({"window": (case.get("reference") or {}).get("window", [])[-14:]}
+                        if case.get("reference") else {}),
         "test_code": {k: v for k, v in (case.get("intent") or {}).items() if k in ("code", "header", "file")},
         "comparisons": comparisons,
         "differing_fields": {"csr": diff.get("csr", ""), "fields": fields} if fields else {},

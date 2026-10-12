@@ -28,7 +28,8 @@ WORD = re.compile(r"[a-z][a-z0-9_.]{1,}")
 STOP = set("""the and for with that this from into when are was were not but has have its any all
 can may must will shall each which then than also only such other more most set clear none true
 false one two zero bit bits field fields value values read write written mode modes register
-registers implementation implementations defined see table figure section""".split())
+registers implementation implementations defined see table figure section got expected cause
+csr csrs hypervisor triggers trigger test tests check checks assert should when""".split())
 HYP = re.compile(r"\b(h[a-z]*(?:tinst|tval|deleg|ideleg|status|vip|ip|ie|geip|geie|gatp|counteren|"
                  r"envcfg|timedelta)|vs[a-z]+|v[su]-?mode|hlv|hsv|hfence|guest|mtval2|mtinst|gva|mpv)\b")
 CURRENT = {"priv": "priv-current", "unpriv": "unpriv-current", "hypervisor": "priv-current"}
@@ -142,6 +143,10 @@ def failure_terms(extracted: dict[str, Any], value_diff: dict[str, Any], case: d
         words.append(str(field.get("field", "")))
     for key in ("xcause", "trap_mcause", "mcause", "expected_cause"):
         words += cause_words(extracted.get(key))
+    # damo assertions say what was checked ("trap cause == virtual-inst (22)").
+    assert_text = re.sub(r"\([^()]*:\d+\)\s*$", "", str(extracted.get("damo_assert", "")))
+    words += [w for w in re.findall(r"[a-z][a-z0-9.]+", assert_text.lower().replace("-", " "))
+              if len(w) > 2]
     info = str(extracted.get("test_info", ""))
     for token in re.findall(r"\b(?:cp|bin):\s*([A-Za-z0-9_]+)", info):
         words += [t for t in token.lower().split("_") if len(t) > 2 and t != "cp"]
@@ -153,7 +158,8 @@ def terms_for(words: list[str]) -> list[str]:
     out = []
     for word in words:
         word = word.lower().strip(".,;:()")
-        if len(word) > 1 and word not in STOP and word not in out:
+        if (len(word) > 1 and word not in STOP and word not in out
+                and not re.match(r"^(?:x|a|t|s)\d+$|^\d", word)):
             out.append(word)
     return out[:14]
 
@@ -167,8 +173,9 @@ def ground(terms: list[str], knowledge: dict[str, Any], rule_ids: list[str] = ()
     hits = []
     for role, vid in versions.items():
         for score, section in _search(vid, terms, 3):
-            # Normalize per version so a big volume does not crowd out the small ones.
-            hits.append((score, role, vid, section))
+            # A hypervisor test is first about the hypervisor chapter the board implements.
+            weight = 1.6 if role == "hypervisor" else 1.0
+            hits.append((score * weight, role, vid, section))
     hits.sort(key=lambda item: -item[0])
     seen = set()
     for _score, role, vid, section in hits:

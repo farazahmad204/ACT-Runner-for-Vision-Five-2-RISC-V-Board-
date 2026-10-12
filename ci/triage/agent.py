@@ -266,8 +266,9 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
     test = case.get("intent") or {}
     if test.get("code"):
         header = "; ".join(test.get("header", []))
-        parts.append(cap(f"Test code at the failing check ('>' marks it; test header: {header}):\n"
-                         + test["code"], 1900))
+        where = f"{test['file']}, " if test.get("file") else ""
+        parts.append(cap(f"Test code at the failing check ({where}'>' marks it"
+                         + (f"; test header: {header}" if header else "") + "):\n" + test["code"], 1900))
     if case.get("board_macros"):
         parts.append(cap("Board macros this check relies on (the board's ACT rvmodel_macros.h):\n"
                          + "\n".join(case["board_macros"]), 1400))

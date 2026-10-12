@@ -623,7 +623,7 @@ def build_report(record: dict[str, Any], board_versions: dict[str, str]) -> dict
         "failure": ex.get("failure") or ex.get("damo_assert") or "",
         "check": ex.get("test_info", ""),
         "instruction": case.get("instruction") or {},
-        "test_code": {k: v for k, v in (case.get("intent") or {}).items() if k in ("code", "header")},
+        "test_code": {k: v for k, v in (case.get("intent") or {}).items() if k in ("code", "header", "file")},
         "comparisons": comparisons,
         "differing_fields": {"csr": diff.get("csr", ""), "fields": fields} if fields else {},
         "trap": _trap(ex),
@@ -695,7 +695,7 @@ def run_triage(
         # Steps 2-3: the failing instruction and what the test does there (from the kept files).
         record["casefile"] = casefile.build(run_root, test, evidence.get("extracted", {}),
                                             failing_address(evidence.get("extracted", {})),
-                                            issue_terms(evidence))
+                                            issue_terms(evidence), str(case.get("suite") or ""))
         known = vault.match(notes, board, test, vault.evidence_text(evidence), evidence)
         record["known_issues"] = known
         resolver = next((n for n in known if vault.resolves(n, board)), None)
@@ -750,14 +750,15 @@ def run_triage(
         spec_found = spec_index.ground(
             spec_index.failure_terms(lead_ex, lead.get("value_diff") or {}, case_file, lead["case"]),
             knowledge, list(dict.fromkeys(rule_ids)),
-            hypervisor=bool(re.search(r"(?:^|[A-Za-z])H(?:Sm|S)?[_-]", lead["case"])))
+            hypervisor=bool(re.search(r"(?:^|[A-Za-z])H(?:Sm|S)?[_-]|^Hypervisor|^Sv\d+x4|^Sh[a-z]",
+                                      lead["case"])))
         grounding = {
             "case": case_file,
             "spec_versions": spec_index.render(spec_found),
             "board_versions": spec_found.get("versions", {}),
             "source_label": label,
             "source": snippet,
-            "norms": norms(code or snippet, str(lead_ex.get("damo_assert", "")),
+            "norms": case_file.get("norms") or norms(code or snippet, str(lead_ex.get("damo_assert", "")),
                            "\n".join(lead_ex.get("evidence_lines", []))),
             "spec": spec,
             "spec_tag": spec_tag,

@@ -17,7 +17,8 @@ results.
   which fills the Root cause, Category, Owner and Evidence columns of the run's
   workbook and marks each failure's Verdict "Needs investigation". Cells a person
   has edited are never overwritten.
-- `riscv-uart-triage` re-triages any retained weekly or sanity build.
+- `riscv-uart-triage` re-triages any retained weekly or sanity build, including
+  `megrez-damo-uart-weekly`.
 - `riscv-uart-single-elf` (the portal's Run one ELF) triages a failed upload the
   same way; the uploader sees the AI analysis on the submission page.
 
@@ -71,7 +72,10 @@ Every weekly and sanity build keeps, for each failed test, the ELF that ran and 
 source, plus the board's ACT config and ACT's env headers (`collect_case_files.py`, called by
 `jenkins_triage.sh`). They go next to the run (`per_case/<test>/test.elf`, `test.S`, `act/`)
 and into the retained artifact store, so a later `riscv-uart-triage` sees exactly what that build
-ran, pinned to its ACT commit (`act/revision.txt`). Run ELF keeps the uploaded ELF the same way.
+ran, pinned to its ACT commit (`act/revision.txt`). Run ELF keeps the uploaded ELF the same way. damo-rv-priv-ats runs (`megrez-damo-uart-weekly`)
+keep, per failing suite, the suite ELF and its C sources, plus damo's shared code, its `NORM/`
+requirement tables and the damo commit (`damo/`); a damo failure's intent is the C test function
+around the failed assertion (`file:line` in the log), and its `norm:` IDs resolve to damo's text.
 
 From these, each failure gets a `casefile.json`:
 

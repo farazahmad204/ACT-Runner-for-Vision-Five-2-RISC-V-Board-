@@ -134,6 +134,14 @@ def link(note: dict[str, Any]) -> str:
     return f"[[{note['id']}]]" + (f" {note['url']}" if note.get("url") else "")
 
 
+# A note's cause -> root-cause class, unless the note names its `classification`.
+CAUSE_CLASSES = {
+    "test-limitation": "Test issue", "framework-bug": "Test issue", "hardware-timing": "Test issue",
+    "reference-model": "Reference-model mismatch", "spec-version": "Unsupported feature",
+    "implementation-choice": "Implementation-defined behavior", "act-config": "Environment issue",
+}
+
+
 def analysis(note: dict[str, Any]) -> dict[str, Any]:
     s = note["_sections"]
     if note.get("outcome"):  # a Verification Agent note: experiment, result, conclusion
@@ -147,7 +155,9 @@ def analysis(note: dict[str, Any]) -> dict[str, Any]:
         reason = s.get("what fails") or s.get("summary") or note.get("title", "")
         root = s.get("what the maintainers concluded") or s.get("summary", "")
         step = s.get("how triage treats a match") or "See the linked issue."
+    klass = note.get("classification") or CAUSE_CLASSES.get(str(note.get("cause", "")), "Inconclusive")
     return {
+        "classification": klass,
         "category": f"known_issue:{note.get('cause', 'unknown')}",
         "failure_reason": reason[:400],
         "root_cause": origin + root[:500],

@@ -53,6 +53,7 @@ class AnswerQuoteTests(unittest.TestCase):
 
     def test_an_invented_quote_loses_confidence_and_is_flagged(self):
         answer = check_answer({"root_cause": "test too strict", "confidence": "high",
+                               "classification": "Test issue",
                                "spec_version": "priv-1.11",
                                "spec_quote": "misaligned exceptions may have lower priority than page faults"},
                               self.REP, {"priv": "priv-1.11"})

@@ -15,6 +15,7 @@ fields_from:
 - H
 auto: true
 cause: act-config
+classification: Reference-model mismatch
 verdict: Test or ACT issue
 evidence:
 - 'vf2-uart-weekly #6 per_case evidence.json'

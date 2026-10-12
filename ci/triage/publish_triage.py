@@ -46,6 +46,9 @@ def build_payload(run_root: Path, job_name: str, build_number: int) -> dict:
                 "ai_analysis": (
                     ai_path.read_text(encoding="utf-8") if ai_path.is_file() else ""
                 ),
+                # The structured analysis for the portal's triage report page.
+                "classification": item.get("classification", ""),
+                "report": item.get("report") or {},
             }
         )
     return {"job_name": job_name, "build_number": build_number, "results": results}

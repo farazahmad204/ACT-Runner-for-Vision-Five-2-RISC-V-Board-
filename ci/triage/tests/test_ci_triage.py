@@ -284,10 +284,12 @@ class CITriageTests(unittest.TestCase):
         from ci.triage.agent import check_answer
 
         generic = check_answer(
-            {"root_cause": "A spec-version difference (draft H).", "confidence": "high"},
+            {"root_cause": "A spec-version difference (draft H).", "confidence": "high",
+             "classification": "Unsupported feature"},
             {"extracted": {"mismatching_field": "Vector+Mode+Status word", "expected_value": "0x1"}})
         specific = check_answer(
-            {"root_cause": "A spec-version difference (draft H).", "confidence": "high"},
+            {"root_cause": "A spec-version difference (draft H).", "confidence": "high",
+             "classification": "Unsupported feature"},
             {"extracted": {"mismatching_field": "MTINST/HTINST", "expected_value": "0x3000"}})
         self.assertEqual(generic["confidence"], "medium")
         self.assertEqual(specific["confidence"], "high")
@@ -339,3 +341,35 @@ class HardwareBugClaimTests(unittest.TestCase):
         self.assertFalse(claims_hardware_bug("act/test config limitation, not a demonstrated hardware bug"))
         self.assertFalse(claims_hardware_bug("this evidence does not establish a u74 hardware defect"))
         self.assertFalse(claims_hardware_bug("rather than treating this as a hardware defect"))
+
+
+class ClassificationTests(unittest.TestCase):
+    REP = {"extracted": {"instruction": "0x10502773", "expected_value": "0x1", "actual_value": "0x0"}}
+
+    def test_dut_noncompliance_needs_instruction_values_and_a_verified_applicable_quote(self):
+        from ci.triage.agent import check_answer
+        weak = check_answer({"classification": "DUT noncompliance", "root_cause": "core bug",
+                             "confidence": "high"}, self.REP, {"priv": "priv-1.11"}, True)
+        self.assertEqual(weak["classification"], "Inconclusive")
+        self.assertIn("a verified quote", weak["checked"])
+        strong = check_answer({"classification": "DUT noncompliance", "root_cause": "core bug",
+                               "confidence": "high", "spec_version": "priv-1.11",
+                               "spec_quote": "The priority of any custom synchronous exceptions is "
+                                             "implementation-defined."},
+                              self.REP, {"priv": "priv-1.11"}, True)
+        self.assertEqual(strong["classification"], "DUT noncompliance")
+        self.assertEqual(strong["suggested_verdict"], "Confirmed hardware bug")
+
+    def test_unknown_class_becomes_inconclusive(self):
+        from ci.triage.agent import check_answer
+        answer = check_answer({"classification": "Cosmic rays", "confidence": "high"}, self.REP)
+        self.assertEqual((answer["classification"], answer["confidence"]), ("Inconclusive", "low"))
+
+    def test_workbook_gets_confident_suggestions_but_never_an_unconfirmed_hardware_bug(self):
+        from ci.triage.ci_triage import workbook_verdict
+        self.assertEqual(workbook_verdict({"analysis": {"classification": "Test issue", "confidence": "high"}}),
+                         "Test or ACT issue")
+        self.assertEqual(workbook_verdict({"analysis": {"classification": "Test issue", "confidence": "medium"}}), "")
+        self.assertEqual(workbook_verdict({"analysis": {"classification": "DUT noncompliance",
+                                                        "confidence": "high"}}), "")
+        self.assertEqual(workbook_verdict({"analysis": {"verdict": "Waived"}}), "Waived")

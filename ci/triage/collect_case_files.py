@@ -35,10 +35,39 @@ def safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "case"
 
 
-def failed_cases(run_root: Path) -> list[str]:
+def failed_cases(run_root: Path) -> list[dict]:
     cases = json.loads((run_root / "cases.json").read_text(encoding="utf-8"))
-    return [str(c.get("test_name") or c.get("name")) for c in cases
-            if str(c.get("status", "")).upper() not in NOT_FAILURES]
+    return [c for c in cases if str(c.get("status", "")).upper() not in NOT_FAILURES]
+
+
+DAMO_SOURCE = {".c", ".h", ".S", ".ld"}
+
+
+def collect_damo(run_root: Path, state_root: Path, damo_root: Path, suites: set[str]) -> int:
+    """damo-rv-priv-ats runs one ELF per suite and reports failed assertions by file:line, so
+    keep each failing suite's ELF and sources, the shared code and the requirement tables."""
+    out = run_root / "damo"
+    kept = 0
+    for suite in sorted(suites):
+        source = damo_root / suite
+        if not source.is_dir():
+            continue
+        for path in source.rglob("*"):
+            if path.is_file() and path.suffix in DAMO_SOURCE and "build" not in path.parts:
+                copy(path, out / suite / path.relative_to(source))
+        elf = state_root / "elfs" / f"{suite}.elf"
+        if elf.is_file():
+            copy(elf, out / suite / "suite.elf")
+        kept += 1
+    for shared in ("common", "NORM"):
+        for path in (damo_root / shared).rglob("*") if (damo_root / shared).is_dir() else ():
+            if path.is_file() and (path.suffix in DAMO_SOURCE or shared == "NORM"):
+                copy(path, out / shared / path.relative_to(damo_root / shared))
+    revision = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(damo_root), "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+    if kept:
+        (out / "revision.txt").write_text(f"damo_commit={revision}\n", encoding="utf-8")
+    return kept
 
 
 def index_files(roots: list[Path], wanted: set[str]) -> dict[str, dict[str, Path]]:
@@ -76,10 +105,14 @@ def copy(source: Path, destination: Path) -> None:
 
 
 def collect(run_root: Path, state_root: Path, board: str, act_root: Path,
-            search: list[Path]) -> dict[str, int]:
-    cases = failed_cases(run_root)
-    found = index_files(search, set(cases))
-    counts = {"failed": len(cases), "elf": 0, "S": 0}
+            search: list[Path], damo_root: Path | None = None) -> dict[str, int]:
+    failed = failed_cases(run_root)
+    suites = {str(c["suite"]) for c in failed if c.get("suite")}
+    cases = [str(c.get("test_name") or c.get("name")) for c in failed if not c.get("suite")]
+    counts = {"failed": len(failed), "elf": 0, "S": 0, "suites": 0}
+    if suites and damo_root:
+        counts["suites"] = collect_damo(run_root, state_root, damo_root, suites)
+    found = index_files(search, set(cases)) if cases else {}
     for case in cases:
         target = run_root / "per_case" / safe_name(case)
         for kind, name in (("elf", "test.elf"), ("S", "test.S")):
@@ -87,6 +120,8 @@ def collect(run_root: Path, state_root: Path, board: str, act_root: Path,
             if source:
                 copy(source, target / name)
                 counts[kind] += 1
+    if not cases:  # damo only: no ACT config or env headers involved
+        return counts
     act_out = run_root / "act"
     config = act_config_dir(board, act_root)
     if config:
@@ -108,7 +143,8 @@ def collect(run_root: Path, state_root: Path, board: str, act_root: Path,
 
 
 def mirror(run_root: Path, store: Path) -> None:
-    for path in list((run_root / "per_case").glob("*/test.*")) + list((run_root / "act").rglob("*")):
+    for path in (list((run_root / "per_case").glob("*/test.*")) + list((run_root / "act").rglob("*"))
+                 + list((run_root / "damo").rglob("*"))):
         if path.is_file():
             copy(path, store / path.relative_to(run_root))
 
@@ -119,6 +155,7 @@ def main() -> int:
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--board", required=True)
     parser.add_argument("--act-root", type=Path, default=Path("external/riscv-arch-test"))
+    parser.add_argument("--damo-root", type=Path, default=Path("external/damo-rv-priv-ats"))
     parser.add_argument("--search", type=Path, action="append", default=[],
                         help="extra directories holding generated .S and .elf files")
     parser.add_argument("--store-dir", type=Path, help="retained artifact directory of this build")
@@ -128,14 +165,16 @@ def main() -> int:
         return 0
     search = [args.state_root / "generated_tests", *args.act_root.glob("work-*"), *args.search]
     try:
-        counts = collect(args.run_root, args.state_root, args.board, args.act_root, search)
+        counts = collect(args.run_root, args.state_root, args.board, args.act_root, search,
+                         args.damo_root)
         if args.store_dir:
             mirror(args.run_root, args.store_dir)
     except Exception as exc:  # noqa: BLE001 - advisory; never fail the build
         print(f"Case files: not collected ({exc})", file=sys.stderr)
         return 0
-    print(f"Case files: {counts['elf']} ELF and {counts['S']} source file(s) kept for "
-          f"{counts['failed']} failed case(s)" + (f"; mirrored to {args.store_dir}" if args.store_dir else ""))
+    print(f"Case files: {counts['elf']} ELF and {counts['S']} source file(s)"
+          + (f" and {counts['suites']} damo suite(s)" if counts["suites"] else "")
+          + f" kept for {counts['failed']} failed case(s)" + (f"; mirrored to {args.store_dir}" if args.store_dir else ""))
     return 0
 
 

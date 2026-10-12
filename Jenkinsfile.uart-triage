@@ -20,6 +20,7 @@ pipeline {
         string(name: 'RUNNER_REVISION_OVERRIDE', defaultValue: '',
             description: 'Optional exact runner commit.')
         choice(name: 'SOURCE_JOB', choices: ['vf2-uart-weekly', 'bpif3-uart-weekly', 'megrez-uart-weekly',
+                                          'megrez-damo-uart-weekly',
                                           'vf2-uart-sanity', 'bpif3-uart-sanity', 'megrez-uart-sanity'],
             description: 'Weekly or sanity job whose retained artifacts will be analyzed.')
         string(name: 'SOURCE_BUILD_NUMBER', defaultValue: '',
@@ -105,7 +106,7 @@ PY
                       exit 2
                     }
                     case "$SOURCE_JOB" in
-                      vf2-uart-weekly|bpif3-uart-weekly|megrez-uart-weekly) ;;
+                      vf2-uart-weekly|bpif3-uart-weekly|megrez-uart-weekly|megrez-damo-uart-weekly) ;;
                       vf2-uart-sanity|bpif3-uart-sanity|megrez-uart-sanity) ;;
                       *) echo "Unsupported SOURCE_JOB: $SOURCE_JOB" >&2; exit 2 ;;
                     esac

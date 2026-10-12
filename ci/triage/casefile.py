@@ -24,6 +24,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+FUNCTION = re.compile(r"^\s*(?:static\s+)?(?:bool|void|int|uint\w*|long)\s+\w+\s*\([^;]*\)\s*\{?\s*$")
 CONSTANT = re.compile(r"\b([A-Z][A-Z0-9]*_[A-Z0-9_]{2,})\b")
 MACRO_USE = re.compile(r"\b((?:RVTEST|RVMODEL|RVCP|SIG|LA|LI)_?[A-Z0-9_]*)\b")
 DEFINE = re.compile(r"^\s*#\s*define\s+([A-Z_][A-Z0-9_]*)\b")
@@ -110,9 +111,20 @@ def intent(source: Path, bin_label: str | None, line: int | None,
     if anchor is None:
         return {"header": _header(lines)}
     start = anchor - 1
-    # Back to the previous check's label: that is this check's setup.
-    while start > 1 and anchor - start < before and not re.match(r"^[A-Za-z0-9_]+:\s*$", lines[start - 2]):
-        start -= 1
+    if source.suffix == ".c":
+        # Back to the start of the test function the assertion is in (damo: one per case).
+        for number in range(anchor - 1, max(anchor - 80, 1) - 1, -1):
+            if FUNCTION.match(lines[number - 1]):
+                start = number
+                break
+        else:
+            start = max(anchor - before, 1)
+        if anchor - start > 60:  # a long case: keep its header and the lines before the check
+            start = anchor - before
+    else:
+        # Back to the previous check's label: that is this check's setup.
+        while start > 1 and anchor - start < before and not re.match(r"^[A-Za-z0-9_]+:\s*$", lines[start - 2]):
+            start -= 1
     stop = min(anchor + after, len(lines))
     snippet = "\n".join(f"{n:5}{'>' if n == anchor else ' '} {lines[n - 1].rstrip()[:150]}"
                         for n in range(max(start, 1), stop + 1))
@@ -252,8 +264,52 @@ def act_revision(run_root: Path) -> str:
 
 # ---------- all of it for one failure ----------
 
+# ---------- damo-rv-priv-ats ----------
+
+@lru_cache(maxsize=4)
+def _damo_norms(directory: str) -> dict[str, str]:
+    table: dict[str, str] = {}
+    for path in Path(directory).glob("*.md"):
+        for match in re.finditer(r"\|\s*`norm:([A-Za-z0-9_]+)`\s*\|\s*([^|]+?)\s*\|",
+                                 path.read_text(encoding="utf-8", errors="replace")):
+            table.setdefault(match.group(1), match.group(2).strip())
+    return table
+
+
+def build_damo(run_root: Path, suite: str, extracted: dict[str, Any], address: int | None) -> dict[str, Any]:
+    """A damo case: the C source at the failed assertion (file:line in the log) and, when the
+    log shows a trap, the instruction at the trapping PC in the suite's ELF."""
+    folder = run_root / "damo" / suite
+    found: dict[str, Any] = {}
+    inst = instruction(folder / "suite.elf", address)
+    if inst:
+        found["instruction"] = inst
+    hint = re.search(r"\(([^()\s]+):(\d+)\)\s*$", str(extracted.get("damo_assert") or ""))
+    if hint:
+        relative = hint.group(1)
+        for candidate in (folder / relative, run_root / "damo" / relative):
+            if candidate.is_file():
+                test = intent(candidate, None, int(hint.group(2)), before=24, after=3)
+                if test.get("code"):
+                    test["file"] = relative
+                    found["intent"] = test
+                break
+    code = (found.get("intent") or {}).get("code", "")
+    table = _damo_norms(str(run_root / "damo" / "NORM"))
+    ids = dict.fromkeys(re.findall(r"norm:([A-Za-z0-9_]+)", code + " " + str(extracted.get("damo_assert", ""))))
+    norms = [f"norm:{n}: {table[n][:300]}" for n in ids if n in table]
+    if norms:
+        found["norms"] = norms[:4]
+    revision = run_root / "damo" / "revision.txt"
+    if revision.is_file():
+        found["act_revision"] = revision.read_text(encoding="utf-8").strip()
+    return found
+
+
 def build(run_root: Path, case: str, extracted: dict[str, Any], address: int | None,
-          extra_terms: list[str]) -> dict[str, Any]:
+          extra_terms: list[str], suite: str = "") -> dict[str, Any]:
+    if suite and (run_root / "damo" / suite).is_dir():
+        return build_damo(run_root, suite, extracted, address)
     folder = case_dir(run_root, case)
     found: dict[str, Any] = {}
     inst = instruction(folder / "test.elf", address)

@@ -126,7 +126,7 @@ class CollectTests(unittest.TestCase):
             (act / "config" / "cores" / "sifive_u74" / "sail.json").write_text("{}")
             (act / "config" / "cores" / "sifive_u74" / "visionfive2-rv64gc.yaml").write_text("x: 1")
             counts = collect(run, state, "vf2_jh7110", act, [state / "generated_tests", *act.glob("work-*")])
-            self.assertEqual(counts, {"failed": 1, "elf": 1, "S": 1})
+            self.assertEqual(counts, {"failed": 1, "elf": 1, "S": 1, "suites": 0})
             self.assertEqual((run / "per_case" / "A-00" / "test.elf").read_text(), "elf")
             self.assertFalse((run / "per_case" / "B-00").exists())
             self.assertTrue((run / "act" / "config" / "sail.json").is_file())
@@ -135,3 +135,53 @@ class CollectTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DamoCaseFileTests(unittest.TestCase):
+    def test_damo_case_shows_the_c_source_at_the_assertion_and_its_requirement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            tests = run / "damo" / "Hypervisor_CSR" / "tests"
+            tests.mkdir(parents=True)
+            (tests / "test_csr.c").write_text("\n".join(
+                [f"// line {n}" for n in range(1, 30)]
+                + ["    /* Per norm:H_scsrs_nomatch, senvcfg keeps its usual accessibility. */",
+                   '    TEST_ASSERT("VS-mode senvcfg read (no trap per norm:H_scsrs_nomatch)", ok);']))
+            (run / "damo" / "NORM").mkdir(parents=True)
+            (run / "damo" / "NORM" / "hypervisor_norm.md").write_text(
+                "| `norm:H_scsrs_nomatch` | Some standard supervisor CSRs have no matching VS CSR. |\n")
+            casefile._damo_norms.cache_clear()
+            found = casefile.build(run, "Hypervisor_CSR-VCSR_16", {
+                "damo_assert": "VS-mode senvcfg read (no trap per norm:H_scsrs_nomatch) (tests/test_csr.c:31)"},
+                None, [], "Hypervisor_CSR")
+        self.assertEqual(found["intent"]["file"], "tests/test_csr.c")
+        self.assertIn(">     TEST_ASSERT(\"VS-mode senvcfg read", found["intent"]["code"])
+        self.assertEqual(found["norms"],
+                         ["norm:H_scsrs_nomatch: Some standard supervisor CSRs have no matching VS CSR."])
+
+
+class DamoCollectTests(unittest.TestCase):
+    def test_failing_suites_keep_their_elf_sources_and_requirement_tables(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run, state, damo = root / "run", root / "state", root / "damo"
+            run.mkdir()
+            (run / "cases.json").write_text(json.dumps([
+                {"test_name": "Hypervisor_CSR-A", "suite": "Hypervisor_CSR", "status": "FAIL"},
+                {"test_name": "Sha-B", "suite": "Sha", "status": "PASS"}]))
+            (damo / "Hypervisor_CSR" / "tests").mkdir(parents=True)
+            (damo / "Hypervisor_CSR" / "tests" / "t.c").write_text("x")
+            (damo / "Hypervisor_CSR" / "main.o").write_text("object")
+            (damo / "Sha").mkdir()
+            (damo / "Sha" / "main.c").write_text("x")
+            (damo / "NORM").mkdir()
+            (damo / "NORM" / "h.md").write_text("table")
+            (state / "elfs").mkdir(parents=True)
+            (state / "elfs" / "Hypervisor_CSR.elf").write_text("elf")
+            counts = collect(run, state, "milkv_megrez_eic7700x", root / "act", [], damo)
+            self.assertEqual(counts["suites"], 1)
+            self.assertTrue((run / "damo" / "Hypervisor_CSR" / "tests" / "t.c").is_file())
+            self.assertTrue((run / "damo" / "Hypervisor_CSR" / "suite.elf").is_file())
+            self.assertFalse((run / "damo" / "Hypervisor_CSR" / "main.o").exists())
+            self.assertFalse((run / "damo" / "Sha").exists())
+            self.assertTrue((run / "damo" / "NORM" / "h.md").is_file())

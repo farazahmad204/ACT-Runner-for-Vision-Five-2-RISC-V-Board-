@@ -92,6 +92,27 @@ From these, each failure gets a `casefile.json`:
   the test requires, and what decides its trap cause (misaligned priority, PMP, memory map,
   CLINT/PLIC for interrupts).
 
+## What the reference model did (`sail_trace.py`)
+
+The ELF that ran on the board carries the board's boot and interrupt macro code, which Sail does
+not model, so the reference run uses the signature ELF ACT built for Sail (`test.sig.elf`, kept
+by `collect_case_files.py`) with the board's `sail.json`. The failing PC is moved across by the
+nearest code label (check labels `<cg>_<cp>_<bin>` exist in both builds) plus its offset; a
+virtual PC keeps its high bits. If the instruction there is not the same one (ignoring
+immediates), the builds differ at that point, typically board RVMODEL code inside an ACT
+routine such as `rvtest_set_mext_int_*`, and the case file says so instead of showing an
+unrelated instruction.
+
+Sail (0.14.1, `/data/ci/toolchains/riscv-sail-0.14.1`, or `TRIAGE_SAIL`; `TRIAGE_SAIL=off`
+disables it) runs once per failure with an instruction limit and a timeout, and its trace is
+read as a stream. The case file gets the instruction as Sail executed it and its result (the
+value read, the trap taken), earlier writes to the same CSR family and device stores (setup),
+and the instructions just before it. On Megrez weekly #7 that took 16 s for 40 failures; 23 got
+a trace. Examples: the interrupt priority checks read `sip = 0x2222` in Sail because the test's
+`RVMODEL_SET_SSW_INT` store to `0x0C000004` raises SSIP in Sail's simulated device, which the
+board does not have; `SvPMP_sv48_pmp_on_pa_Smode` takes the same access fault in both, but Sail
+writes `mtval = 0x8090009014` (40 bits) where the board writes the full virtual address.
+
 ## The specification each board implements (`spec.py`)
 
 `knowledge/spec_versions.json.gz` (built by `tools/build_spec_versions.py` from the

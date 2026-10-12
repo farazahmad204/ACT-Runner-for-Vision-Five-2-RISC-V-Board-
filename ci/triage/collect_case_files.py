@@ -6,6 +6,8 @@
 For every failed case (not PASS/SKIPPED) it copies into RUN/per_case/<case>/:
   test.elf   the self-checking ELF that ran on the board (disassembly, addr2line)
   test.S     the generated test source (what the test does around the failing check)
+  test.sig.elf  the signature ELF ACT built for Sail (sail_trace.py runs it to show what the
+             reference model did at the failing instruction)
 Once per run it copies into RUN/act/:
   config/    the board's ACT config directory (rvmodel_macros.h, sail.json, UDB yaml, link.ld)
   env/       ACT's tests/env headers (trap handler, signature and failure macros)
@@ -78,13 +80,12 @@ def index_files(roots: list[Path], wanted: set[str]) -> dict[str, dict[str, Path
             continue
         for path in root.rglob("*"):
             name = path.name
-            if name.endswith(".sig.elf"):
-                continue
-            for suffix, kind in ((".elf", "elf"), (".S", "S")):
+            for suffix, kind in ((".sig.elf", "sig"), (".elf", "elf"), (".S", "S")):
                 if name.endswith(suffix) and name[: -len(suffix)] in wanted:
                     slot = found.setdefault(name[: -len(suffix)], {})
                     if kind not in slot or path.stat().st_mtime > slot[kind].stat().st_mtime:
                         slot[kind] = path
+                    break
     return found
 
 
@@ -109,13 +110,13 @@ def collect(run_root: Path, state_root: Path, board: str, act_root: Path,
     failed = failed_cases(run_root)
     suites = {str(c["suite"]) for c in failed if c.get("suite")}
     cases = [str(c.get("test_name") or c.get("name")) for c in failed if not c.get("suite")]
-    counts = {"failed": len(failed), "elf": 0, "S": 0, "suites": 0}
+    counts = {"failed": len(failed), "elf": 0, "sig": 0, "S": 0, "suites": 0}
     if suites and damo_root:
         counts["suites"] = collect_damo(run_root, state_root, damo_root, suites)
     found = index_files(search, set(cases)) if cases else {}
     for case in cases:
         target = run_root / "per_case" / safe_name(case)
-        for kind, name in (("elf", "test.elf"), ("S", "test.S")):
+        for kind, name in (("elf", "test.elf"), ("sig", "test.sig.elf"), ("S", "test.S")):
             source = found.get(case, {}).get(kind)
             if source:
                 copy(source, target / name)
@@ -172,7 +173,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - advisory; never fail the build
         print(f"Case files: not collected ({exc})", file=sys.stderr)
         return 0
-    print(f"Case files: {counts['elf']} ELF and {counts['S']} source file(s)"
+    print(f"Case files: {counts['elf']} ELF, {counts['sig']} signature ELF and {counts['S']} source file(s)"
           + (f" and {counts['suites']} damo suite(s)" if counts["suites"] else "")
           + f" kept for {counts['failed']} failed case(s)" + (f"; mirrored to {args.store_dir}" if args.store_dir else ""))
     return 0

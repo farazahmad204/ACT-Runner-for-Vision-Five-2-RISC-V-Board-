@@ -24,6 +24,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+try:
+    from . import sail_trace
+except ImportError:  # run as a script from ci/triage
+    import sail_trace  # type: ignore[no-redef]
+
 FUNCTION = re.compile(r"^\s*(?:static\s+)?(?:bool|void|int|uint\w*|long)\s+\w+\s*\([^;]*\)\s*\{?\s*$")
 CONSTANT = re.compile(r"\b([A-Z][A-Z0-9]*_[A-Z0-9_]{2,})\b")
 MACRO_USE = re.compile(r"\b((?:RVTEST|RVMODEL|RVCP|SIG|LA|LI)_?[A-Z0-9_]*)\b")
@@ -343,6 +348,15 @@ def build(run_root: Path, case: str, extracted: dict[str, Any], address: int | N
     settings = sail_settings(run_root, words + extra_terms, cause, extensions)
     if settings:
         found["sail_settings"] = settings
+    # Step 4: what the reference model did at the same instruction.
+    config = run_root / "act" / "config" / "sail.json"
+    if inst and (folder / "test.sig.elf").is_file() and config.is_file():
+        csrs = re.findall(r"\bcsrr[sciw]i?\s+[a-z0-9]+,\s*([a-z0-9]+)", inst.get("at", ""))
+        text = re.match(r"^0x[0-9a-f]+:\s+[0-9a-f]+\s+(.*)$", inst.get("at", ""))
+        ref = sail_trace.reference(folder / "test.elf", folder / "test.sig.elf", config, address, csrs,
+                                   encoding=text.group(1) if text else "")
+        if ref:
+            found["reference"] = ref
     revision = act_revision(run_root)
     if revision:
         found["act_revision"] = revision

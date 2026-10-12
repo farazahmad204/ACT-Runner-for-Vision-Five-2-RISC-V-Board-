@@ -595,7 +595,9 @@ def run_triage(
         record = {"case": case, "evidence": evidence, "signature": signature,
                   "analysis": None, "source": "", "ai_status": "DISABLED", "ai_error": ""}
         test = evidence["case"]
-        hit = None if refresh_memory else memory.lookup(board, signature, test)
+        hit = memory.lookup(board, signature, test)
+        if refresh_memory and hit and hit["source"] != "person":
+            hit = None  # analyze again; a person's verdict is still authoritative
         attach_value_diff(evidence, log_text, knowledge)
         known = vault.match(notes, board, test, vault.evidence_text(evidence))
         record["known_issues"] = known

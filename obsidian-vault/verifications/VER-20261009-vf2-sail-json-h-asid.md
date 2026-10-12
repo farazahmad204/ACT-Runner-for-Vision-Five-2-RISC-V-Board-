@@ -9,10 +9,10 @@ outcome: confirmed
 boards:
 - vf2_jh7110
 tests:
-- Sm_mcsr_access*
-- Sm_mcsr_walk*
-signals:
-- '"extensions": ["h"]'
+- '*'
+signals: []
+fields_from:
+- H
 auto: true
 cause: act-config
 verdict: Test or ACT issue
@@ -43,10 +43,12 @@ pipeline uses.
 - Sm_mcsr_walk-00 (`mstatus_set_bit_38`): expected bit 38 (GVA) set, read 0.
 - Sv_sv39_satp_access_Smode-00 / SvSm_sv39_satp_access_Mmode-00: expected satp bit 44 (ASID) set,
   read 0.
+- Sm_shadow-00 (`mip_readback_nonzero_masked`, found by the 2026-10-12 re-triage): expected mip
+  0x226, read 0x222; the missing bit is VSSIP (bit 2), an H field.
 
 ## Conclusion
 
 Sail predicts H and ASID bits the U74 does not implement, so these failures are an ACT config
 error, not hardware. Fix: in the VF2 sail.json set `H.supported` false and `asidlen` 0, and drop
-H from the UDB yaml if it is declared there; then regenerate. Until then triage marks the mstatus
-GVA/MPV failures 'Test or ACT issue' (this note) and the satp ASID failures via SAIL-1846.
+H from the UDB yaml if it is declared there; then regenerate. Until then triage marks every VF2 failure whose
+differing CSR fields all come from H (`fields_from: [H]`) 'Test or ACT issue' (this note) and the satp ASID failures via SAIL-1846.

@@ -8,6 +8,7 @@ Each note has YAML frontmatter saying when it applies:
   boards:  [vf2_jh7110]        board ids; empty = any board
   tests:   ["Sstvecd*"]        case-name globs (case-insensitive); empty = any test
   signals: ["mcause=0x1"]      lowercase substrings that must all appear in the evidence
+  fields_from: [H]             every CSR field in the value diff belongs to these extensions
   auto:    true                a match explains the failure without AI
   verdict, cause, resolution, state, url
 
@@ -91,9 +92,17 @@ def evidence_text(evidence: dict[str, Any]) -> str:
                      str(evidence.get("deterministic_explanation", ""))]).lower()
 
 
-def match(notes: list[dict[str, Any]], board: str, test: str, text: str) -> list[dict[str, Any]]:
+def _diff_extensions(evidence: dict[str, Any] | None) -> list[set[str]]:
+    vd = (evidence or {}).get("value_diff") or {}
+    return [{str(e).lower() for e in f.get("extensions") or []}
+            for f in (vd.get("missing_fields") or []) + (vd.get("extra_fields") or [])]
+
+
+def match(notes: list[dict[str, Any]], board: str, test: str, text: str,
+          evidence: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Notes that apply to this failure, most specific first."""
     found = []
+    diff_exts = _diff_extensions(evidence)
     for note in notes:
         boards = [str(b) for b in note.get("boards") or []]
         tests = [str(t) for t in note.get("tests") or []]
@@ -106,7 +115,11 @@ def match(notes: list[dict[str, Any]], board: str, test: str, text: str) -> list
             continue
         if any(s not in text for s in signals):
             continue
-        score = 3 * bool(tests) + 2 * bool(boards) + len(signals)
+        # fields_from: every differing CSR field belongs to one of these extensions.
+        allowed = {str(e).lower() for e in note.get("fields_from") or []}
+        if allowed and not (diff_exts and all(exts & allowed for exts in diff_exts)):
+            continue
+        score = 3 * bool(tests) + 2 * bool(boards) + len(signals) + 2 * bool(allowed)
         found.append((score, note))
     found.sort(key=lambda item: -item[0])
     return [note for _score, note in found]

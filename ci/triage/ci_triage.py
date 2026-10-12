@@ -599,7 +599,7 @@ def run_triage(
         if refresh_memory and hit and hit["source"] != "person":
             hit = None  # analyze again; a person's verdict is still authoritative
         attach_value_diff(evidence, log_text, knowledge)
-        known = vault.match(notes, board, test, vault.evidence_text(evidence))
+        known = vault.match(notes, board, test, vault.evidence_text(evidence), evidence)
         record["known_issues"] = known
         resolver = next((n for n in known if vault.resolves(n, board)), None)
         if resolver and not (hit and hit["source"] == "person"):

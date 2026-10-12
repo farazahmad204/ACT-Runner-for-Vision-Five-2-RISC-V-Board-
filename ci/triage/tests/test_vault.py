@@ -120,7 +120,7 @@ class RunTriageVaultTests(unittest.TestCase):
         self.assertEqual(result["ai_status"], "VAULT")
         self.assertEqual(result["verdict"], "Test or ACT issue")
         self.assertEqual(result["known_issues"], ["ACT-1"])
-        self.assertIn("[[ACT-1]] https://github.com/x/1", report)
+        self.assertIn("Known issue ACT-1 https://github.com/x/1", report)
 
     def test_other_matching_note_goes_into_the_ai_question(self):
         prompts = []

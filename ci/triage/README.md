@@ -65,6 +65,29 @@ shared signatures without AI; 15 AI calls instead of 30, with questions about a 
 smaller (55 KB sent instead of 166 KB); a second run used memory only (0 calls, 0.3 s).
 `--refresh-memory` analyzes everything again.
 
+## The case file: failing instruction and test intent (`casefile.py`)
+
+Every weekly and sanity build keeps, for each failed test, the ELF that ran and its generated
+source, plus the board's ACT config and ACT's env headers (`collect_case_files.py`, called by
+`jenkins_triage.sh`). They go next to the run (`per_case/<test>/test.elf`, `test.S`, `act/`)
+and into the retained artifact store, so a later `riscv-uart-triage` sees exactly what that build
+ran, pinned to its ACT commit (`act/revision.txt`). Run ELF keeps the uploaded ELF the same way.
+
+From these, each failure gets a `casefile.json`:
+
+- **instruction**: the failing instruction and its neighbours, disassembled from that ELF at the
+  trapping PC (xepc/mepc) or the checking PC, with its source line.
+- **intent**: the test code at the failing check. Generated tests label every check
+  `<covergroup>_<coverpoint>_<bin>`, the same names as the log's test info, so the check is
+  found exactly; the snippet runs back to the previous check (the setup) and comes with the
+  test header (required extensions, defines).
+- **board macros**: the board's `rvmodel_macros.h` definitions the check relies on, found by
+  following the RVTEST_* macros it uses through the env headers, including `jal` into env
+  routines, plus the constants they use (for example `RVMODEL_SET_SSW_INT` and `SIG_ADDRESS`).
+- **sail settings**: the board's `sail.json` settings for the failure's CSRs, the extensions
+  the test requires, and what decides its trap cause (misaligned priority, PMP, memory map,
+  CLINT/PLIC for interrupts).
+
 ## What the AI is given (`context.py`)
 
 Each AI question is grounded, every part small and best effort:

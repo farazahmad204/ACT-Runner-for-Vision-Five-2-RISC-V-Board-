@@ -330,3 +330,12 @@ class CITriageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HardwareBugClaimTests(unittest.TestCase):
+    def test_negated_mentions_are_not_claims(self):
+        from ci.triage.agent import claims_hardware_bug
+        self.assertTrue(claims_hardware_bug("this is a hardware bug in the u74"))
+        self.assertFalse(claims_hardware_bug("act/test config limitation, not a demonstrated hardware bug"))
+        self.assertFalse(claims_hardware_bug("this evidence does not establish a u74 hardware defect"))
+        self.assertFalse(claims_hardware_bug("rather than treating this as a hardware defect"))

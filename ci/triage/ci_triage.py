@@ -26,7 +26,7 @@ try:
         declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
     )
     from .memory import TriageMemory
-    from . import vault
+    from . import casefile, vault
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
         declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
@@ -36,6 +36,7 @@ except ImportError:  # run as a script from ci/triage
         failure_signature, load_knowledge, rule_analysis,
     )
     from memory import TriageMemory  # type: ignore[no-redef]
+    import casefile  # type: ignore[no-redef]
     import vault  # type: ignore[no-redef]
 
 
@@ -599,7 +600,11 @@ def run_triage(
         if refresh_memory and hit and hit["source"] != "person":
             hit = None  # analyze again; a person's verdict is still authoritative
         attach_value_diff(evidence, log_text, knowledge)
-        known = vault.match(notes, board, test, vault.evidence_text(evidence))
+        # Steps 2-3: the failing instruction and what the test does there (from the kept files).
+        record["casefile"] = casefile.build(run_root, test, evidence.get("extracted", {}),
+                                            failing_address(evidence.get("extracted", {})),
+                                            issue_terms(evidence))
+        known = vault.match(notes, board, test, vault.evidence_text(evidence), evidence)
         record["known_issues"] = known
         resolver = next((n for n in known if vault.resolves(n, board)), None)
         if resolver and not (hit and hit["source"] == "person"):
@@ -643,10 +648,13 @@ def run_triage(
         terms = query_terms(lead)
         spec, spec_tag = spec_passages(terms)
         known_ids = {note["id"] for note in members[0].get("known_issues") or []}
+        case_file = members[0].get("casefile") or {}
+        code = (case_file.get("intent") or {}).get("code", "")
         grounding = {
+            "case": case_file,
             "source_label": label,
             "source": snippet,
-            "norms": norms(snippet, str(lead_ex.get("damo_assert", "")),
+            "norms": norms(code or snippet, str(lead_ex.get("damo_assert", "")),
                            "\n".join(lead_ex.get("evidence_lines", []))),
             "spec": spec,
             "spec_tag": spec_tag,
@@ -655,7 +663,8 @@ def run_triage(
             "issues": related_issues(lead["case"], issue_terms(lead), exclude=known_ids),
         }
         prompt = compact_prompt(
-            lead, names, knowledge, [] if snippet else disassembly(elf, address),
+            lead, names, knowledge,
+            [] if snippet or case_file.get("instruction") else disassembly(elf, address),
             memory.related(board, lead["deterministic_category"], signature), grounding,
         )
         ai_calls += 1
@@ -666,7 +675,8 @@ def run_triage(
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
             metadata.update(prompt_chars=len(prompt), cluster_size=len(members),
                             grounding=[k for k in ("source", "norms", "spec", "isa", "known_issues", "issues")
-                                       if grounding.get(k)])
+                                       if grounding.get(k)]
+                            + [f"case:{k}" for k in case_file if k != "act_revision"])
             source = "AI" + (f" (one analysis shared by {len(members)} tests with this failure signature)"
                              if len(members) > 1 else "")
             for member in members:
@@ -687,6 +697,10 @@ def run_triage(
             json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         (case_dir / "deterministic.md").write_text(deterministic_markdown(evidence), encoding="utf-8")
+        if record.get("casefile"):
+            (case_dir / "casefile.json").write_text(
+                json.dumps(record["casefile"], indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
         if record["analysis"]:
             (case_dir / "ai_analysis.md").write_text(
                 analysis_report(record["analysis"], record["source"]).rstrip() + "\n", encoding="utf-8"

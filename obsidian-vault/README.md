@@ -45,6 +45,7 @@ cause: test-limitation       # test-limitation | reference-model | spec-version 
 boards: [vf2_jh7110]
 tests: ["Sstvecd*"]          # case-insensitive globs
 signals: []                  # lowercase substrings that must all be in the evidence
+fields_from: []              # optional: every differing CSR field belongs to these extensions
 auto: true
 verdict: Test or ACT issue   # a portal Verdict value
 curated: true                # false = stub from the sync tool, never matches until curated

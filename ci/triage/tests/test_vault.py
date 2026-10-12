@@ -84,6 +84,16 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(vault.match(self.notes, "b1", "x1", "mcause"), [])
 
 
+class FieldsFromTests(unittest.TestCase):
+    def test_every_differing_field_must_come_from_the_listed_extensions(self):
+        note = {"id": "V", "boards": ["b"], "tests": ["*"], "fields_from": ["H"], "_sections": {}}
+        def ev(*exts):
+            return {"value_diff": {"missing_fields": [{"field": "f", "extensions": list(e)} for e in exts]}}
+        self.assertEqual(len(vault.match([note], "b", "t", "", ev(["H"], ["H"]))), 1)
+        self.assertEqual(vault.match([note], "b", "t", "", ev(["H"], ["S"])), [])
+        self.assertEqual(vault.match([note], "b", "t", "", {}), [])
+
+
 class RunTriageVaultTests(unittest.TestCase):
     def _run(self, root, notes, **kw):
         (root / "vault" / "issues").mkdir(parents=True, exist_ok=True)

@@ -34,6 +34,8 @@ pipeline {
             description: 'Jenkins Secret Text credential with an OpenAI API key (openai provider only).')
         string(name: 'AI_TRIAGE_MAX_FAILURES', defaultValue: '0',
             description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
+        booleanParam(name: 'REFRESH_MEMORY', defaultValue: false,
+            description: 'Analyze every failure again instead of reusing earlier rule and AI answers from the triage memory (for example after the triage agent or its knowledge changed). Verdicts people set in the portal are still used. Costs one AI call per failure signature.')
         booleanParam(name: 'PUBLISH_TO_PORTAL', defaultValue: true,
             description: 'Fill the triage columns of the existing run in the portal workbook.')
         string(name: 'PORTAL_CREDENTIAL_ID', defaultValue: 'riscv-portal-ingest-token',

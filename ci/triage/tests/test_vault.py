@@ -140,6 +140,31 @@ class RunTriageVaultTests(unittest.TestCase):
         self.assertEqual(second["results"][0]["ai_status"], "MEMORY")
         self.assertEqual(second["results"][0]["verdict"], "Confirmed hardware bug")
 
+    def test_refresh_redoes_rule_and_ai_answers_but_keeps_a_persons_verdict(self):
+        prompts = []
+
+        def fake_ai(prompt, config, api_key):
+            prompts.append(prompt)
+            return json.dumps({"failure_reason": "x", "root_cause": "y", "confidence": "low",
+                               "next_step": "z"}), {}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            kw = dict(ai_enabled=True, ai_config=AIConfig(), ai_analyzer=fake_ai)
+            first = self._run(root, {}, **kw)
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(self._run(root, {}, **kw)["results"][0]["ai_status"], "MEMORY")
+            self.assertEqual(self._run(root, {}, refresh_memory=True, **kw)["results"][0]["ai_status"],
+                             "SUCCESS")
+            self.assertEqual(len(prompts), 2)
+            memory = TriageMemory(root / "memory.sqlite")
+            memory.remember("vf2_jh7110", first["results"][0]["signature"], "Sstvecd-00", "person",
+                            "x", {"verdict": "Waived"})
+            memory.close()
+            last = self._run(root, {}, refresh_memory=True, **kw)
+        self.assertEqual(last["results"][0]["verdict"], "Waived")
+        self.assertEqual(len(prompts), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

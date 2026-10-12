@@ -4,7 +4,8 @@
 #   jenkins_triage.sh RUN_ROOT STATE_ROOT BOARD_ID
 # Environment (the jobs' parameters): RUN_AI_TRIAGE (true/false), AI_TRIAGE_PROVIDER
 # (codex | openai), AI_TRIAGE_MODEL (blank = provider default), AI_TRIAGE_MAX_FAILURES
-# (0 = all), OPENAI_API_KEY (openai only), CODEX_BIN.
+# (0 = all), REFRESH_MEMORY (true: redo rule/AI answers; people's verdicts are kept),
+# OPENAI_API_KEY (openai only), CODEX_BIN.
 set -euo pipefail
 run_root="$1"
 state_root="$2"
@@ -17,6 +18,10 @@ if [[ ! -f "$run_root/cases.json" ]]; then
 fi
 args=(--run-root "$run_root" --state-root "$state_root" --board "$board"
       --max-ai-failures "${AI_TRIAGE_MAX_FAILURES:-0}")
+if [[ "${REFRESH_MEMORY:-false}" == true ]]; then
+  args+=(--refresh-memory)
+  echo "Triage memory: refresh (earlier rule and AI answers are not reused)"
+fi
 if [[ "${RUN_AI_TRIAGE:-false}" == true ]]; then
   provider="${AI_TRIAGE_PROVIDER:-codex}"
   codex="${CODEX_BIN:-codex}"

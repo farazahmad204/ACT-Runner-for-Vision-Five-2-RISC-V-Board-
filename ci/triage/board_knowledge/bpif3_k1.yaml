@@ -3,3 +3,8 @@ board: bpif3_k1
 facts:
   - "SpacemiT K1 with X60 cores: RVA22 profile with RVV 1.0 (SpacemiT K1 documentation)."
 act_config: config/cores/bpif3/bpif3-rva22s64/bpif3-rva22s64.yaml
+# Specification versions this board implements (ids in knowledge/spec_versions.json.gz).
+spec_versions:
+  priv: priv-1.12
+  unpriv: unpriv-current
+  source: "Declared, not measured: the RVA22 profile the K1 claims requires privileged 1.12."

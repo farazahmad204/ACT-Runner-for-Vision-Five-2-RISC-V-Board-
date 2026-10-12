@@ -88,6 +88,37 @@ From these, each failure gets a `casefile.json`:
   the test requires, and what decides its trap cause (misaligned priority, PMP, memory map,
   CLINT/PLIC for interrupts).
 
+## The specification each board implements (`spec.py`)
+
+`knowledge/spec_versions.json.gz` (built by `tools/build_spec_versions.py` from the
+riscv-isa-manual, CC-BY-4.0) holds the specification as versions, each pinned to its git tag
+or commit:
+
+| Id | Text |
+|---|---|
+| `priv-1.11`, `unpriv-20190608` | Ratified 20190608 releases (LaTeX converted, tables kept) |
+| `priv-1.12`, `h-1.0` | Privileged 20211203 with Hypervisor 1.0 |
+| `h-0.6` | Hypervisor draft 0.6 (manual commit before `cc43c1fe`, 2020) |
+| `priv-current`, `unpriv-current` | Current ratified release, with its normative rules (`norm:ID`) verbatim |
+
+`spec_versions` in `board_knowledge/<board>.yaml` names what a board implements (VF2: priv 1.11;
+Megrez: priv 1.11 and H draft 0.6; BPI-F3: priv 1.12, declared). For each AI question the agent
+searches those versions with words from the failure's structure (the instruction and its CSR,
+the differing fields, the trap causes involved, the coverpoint), shows the best passages labelled
+by version, puts the current ratified text right after a passage only where it differs, and adds
+the current normative rules the test names. The AI is told to judge the hardware against the
+board's versions, not the current text and not ACT, Sail or Spike by default.
+
+Each answer names the passage it relies on (`spec_version`, `spec_quote`). The agent checks the
+quote is in that version: a quote that is not loses confidence and is marked "QUOTE NOT FOUND"
+in the report; a hardware-bug claim citing a version the board does not implement is low
+confidence.
+
+Example: VF2's sv39 misaligned AMO failures. Privileged 1.11, which the U74 implements, lists
+Store/AMO address misaligned (6) above Store/AMO page fault (15) in its fixed exception priority;
+only from 1.12 is misaligned "Optionally" before translation. So reporting cause 6 is what the
+board's own version requires.
+
 ## What the AI is given (`context.py`)
 
 Each AI question is grounded, every part small and best effort:
@@ -98,9 +129,9 @@ Each AI question is grounded, every part small and best effort:
   `external/damo-rv-priv-ats`; paths recorded by another workspace are remapped).
 - **Requirements**: damo `norm:<ID>` tags in that code resolved to the exact spec sentence
   from the suite's `NORM/` tables.
-- **Spec text**: the two most relevant passages of the ratified privileged spec, from
-  `knowledge/priv_spec_chunks.json.gz` (riscv-isa-manual, CC-BY-4.0; rebuild with
-  `tools/build_spec_index.py`), ranked by the failure's CSRs, fields and terms.
+- **Spec text**: the board's own specification versions (see above). Boards without
+  `spec_versions` fall back to two passages of the current privileged spec
+  (`knowledge/priv_spec_chunks.json.gz`, `tools/build_spec_index.py`).
 - **Similar ACT issues**: the two riscv-arch-test issues (of all 645, open and closed, in
   `knowledge/act_issues.json.gz`; refresh with `tools/build_issue_index.py --cache DIR`) that
   name the same test or family, or share two rare identifiers (CSR, field, coverpoint names)

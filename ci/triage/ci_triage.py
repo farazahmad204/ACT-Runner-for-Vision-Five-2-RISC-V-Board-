@@ -27,6 +27,7 @@ try:
     )
     from .memory import TriageMemory
     from . import casefile, vault
+    from . import spec as spec_index
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
         declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
@@ -37,6 +38,7 @@ except ImportError:  # run as a script from ci/triage
     )
     from memory import TriageMemory  # type: ignore[no-redef]
     import casefile  # type: ignore[no-redef]
+    import spec as spec_index  # type: ignore[no-redef]
     import vault  # type: ignore[no-redef]
 
 
@@ -103,12 +105,17 @@ class AIConfig:
 AI_ANSWER_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["failure_reason", "root_cause", "confidence", "next_step"],
+    "required": ["failure_reason", "root_cause", "confidence", "next_step", "spec_version",
+                 "spec_quote"],
     "properties": {
         "failure_reason": {"type": "string"},
         "root_cause": {"type": "string"},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
         "next_step": {"type": "string"},
+        # The passage the answer relies on: a version id from the question, and words copied
+        # from it. The agent checks the quote is in that version. Empty when none applies.
+        "spec_version": {"type": "string"},
+        "spec_quote": {"type": "string"},
     },
 }
 
@@ -393,6 +400,10 @@ def format_ai_report(text: str) -> str:
         ("next_step", "Next step"),
     )
     lines = [f"{label}: {str(answer[key]).strip()}" for key, label in labels if answer.get(key)]
+    if answer.get("spec_quote"):
+        check = {"verified": " (quote verified)", "not_found": " (QUOTE NOT FOUND in that version)"}
+        lines.append(f"Spec [{answer.get('spec_version', '?')}]: \"{str(answer['spec_quote']).strip()}\""
+                     + check.get(answer.get("spec_check", ""), ""))
     return "\n".join(lines) or text.strip()
 
 
@@ -650,8 +661,17 @@ def run_triage(
         known_ids = {note["id"] for note in members[0].get("known_issues") or []}
         case_file = members[0].get("casefile") or {}
         code = (case_file.get("intent") or {}).get("code", "")
+        # Step 5: what the spec versions this board implements say about this failure.
+        rule_ids = re.findall(r"norm:([A-Za-z0-9_]+)", "\n".join(
+            [code, str(lead_ex.get("damo_assert", ""))] + list(lead_ex.get("evidence_lines", []))))
+        spec_found = spec_index.ground(
+            spec_index.failure_terms(lead_ex, lead.get("value_diff") or {}, case_file, lead["case"]),
+            knowledge, list(dict.fromkeys(rule_ids)),
+            hypervisor=bool(re.search(r"(?:^|[A-Za-z])H(?:Sm|S)?[_-]", lead["case"])))
         grounding = {
             "case": case_file,
+            "spec_versions": spec_index.render(spec_found),
+            "board_versions": spec_found.get("versions", {}),
             "source_label": label,
             "source": snippet,
             "norms": norms(code or snippet, str(lead_ex.get("damo_assert", "")),
@@ -670,11 +690,12 @@ def run_triage(
         ai_calls += 1
         try:
             text, raw_response = analyzer(prompt, ai_config, api_key)
-            answer = check_answer(parse_answer(text), lead)
+            answer = check_answer(parse_answer(text), lead, spec_found.get("versions", {}))
             metadata = {key: raw_response.get(key) for key in
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
             metadata.update(prompt_chars=len(prompt), cluster_size=len(members),
-                            grounding=[k for k in ("source", "norms", "spec", "isa", "known_issues", "issues")
+                            grounding=[k for k in ("source", "norms", "spec", "spec_versions", "isa", "known_issues",
+                                                 "issues")
                                        if grounding.get(k)]
                             + [f"case:{k}" for k in case_file if k != "act_revision"])
             source = "AI" + (f" (one analysis shared by {len(members)} tests with this failure signature)"

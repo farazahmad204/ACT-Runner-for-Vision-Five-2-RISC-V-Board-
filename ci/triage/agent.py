@@ -26,8 +26,10 @@ from typing import Any
 import yaml
 
 try:
+    from . import spec as spec_module
     from . import value_diff
 except ImportError:  # run as a script from ci/triage
+    import spec as spec_module  # type: ignore[no-redef]
     import value_diff
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "board_knowledge"
@@ -275,7 +277,10 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
         parts.append("Code at the failing PC:\n" + "\n".join(disasm))
     if g.get("norms"):
         parts.append(cap("Requirements this test checks (exact spec text):\n" + "\n".join(g["norms"]), 1200))
-    if g.get("spec"):
+    if g.get("spec_versions"):
+        parts.append(cap("Specification text (the versions this board implements first; quote from these):\n"
+                         + g["spec_versions"], 3000))
+    elif g.get("spec"):
         parts.append(cap(f"Ratified privileged spec ({g.get('spec_tag')}), most relevant text:\n"
                          + "\n".join(g["spec"]), 1200))
     # Raw log lines only when the structured evidence is thin; otherwise they repeat it.
@@ -302,9 +307,14 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
         "if its test, bin or values match this failure: if they differ, say so instead of citing it. "
         "Causes "
         "to choose from: hardware behavior, spec-version difference, ACT/test config, reference model, "
-        "runner/firmware, CI transport, insufficient evidence. Cite the spec or requirement you rely "
-        "on. Answer as JSON: failure_reason (1-2 sentences, cite values), root_cause (1-3 sentences, "
-        "who should act), confidence (high/medium/low), next_step (1 sentence)."
+        "runner/firmware, CI transport, insufficient evidence. Judge the hardware against the "
+        "specification versions the board implements, not the current text: if its version allows "
+        "or requires the observed behavior, the test or reference expectation is wrong for this "
+        "board. Do not assume ACT, Sail or Spike are right. Answer as JSON: failure_reason (1-2 "
+        "sentences, cite values), root_cause (1-3 sentences, who should act), confidence "
+        "(high/medium/low), next_step (1 sentence), spec_version (the bracketed id of the passage "
+        "you rely on, e.g. priv-1.11, or empty), spec_quote (10-40 words copied exactly from that "
+        "passage, or empty)."
     )
     return body + "\n\n" + instructions
 
@@ -320,7 +330,8 @@ def claims_hardware_bug(text: str) -> bool:
                for m in HW_BUG.finditer(text))
 
 
-def check_answer(answer: dict[str, Any], rep: dict[str, Any]) -> dict[str, Any]:
+def check_answer(answer: dict[str, Any], rep: dict[str, Any],
+                 board_versions: dict[str, str] | None = None) -> dict[str, Any]:
     """Downgrade confidence the evidence does not support."""
     ex = rep.get("extracted", {})
     text = f"{answer.get('root_cause', '')} {answer.get('failure_reason', '')}".lower()
@@ -346,6 +357,19 @@ def check_answer(answer: dict[str, Any], rep: dict[str, Any]) -> dict[str, Any]:
         notes.append("version difference asserted, but the evidence names no hypervisor-specific field")
     if "insufficient evidence" in text:
         answer["confidence"] = "low"
+    # The spec passage the answer relies on must exist in the version it names.
+    quote, version = str(answer.get("spec_quote") or ""), str(answer.get("spec_version") or "")
+    found = spec_module.verify_quote(version, quote) if quote else None
+    if found is True:
+        answer["spec_check"] = "verified"
+        if (board_versions and version not in board_versions.values()
+                and claims_hardware_bug(text)):
+            answer["confidence"] = "low"
+            notes.append(f"claims a hardware bug citing {version}, a version this board does not implement")
+    elif found is False:
+        answer["spec_check"] = "not_found"
+        answer["confidence"] = {"high": "medium"}.get(answer.get("confidence"), "low")
+        notes.append(f"the quoted spec text is not in {version or 'the named version'}")
     if notes:
         answer["checked"] = "; ".join(notes)
     return answer

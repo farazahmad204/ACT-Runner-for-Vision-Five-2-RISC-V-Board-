@@ -60,6 +60,15 @@ stored in memory; only a person's verdict outranks the note):
    past findings of the same category. The answer is checked (an unsupported "hardware
    bug" or a spec-version claim without a hypervisor-specific field loses confidence) and
    stored.
+5. **Investigation** (`investigate.py`): before answering, the AI may test its hypothesis
+   with read-only tools, one per reply, up to `AI_TRIAGE_MAX_STEPS` (default 3; `0` answers
+   at once): `disassemble`, `reference` (Sail at an address, at most two runs), `spec` (the
+   board's spec versions), `issues` (riscv-arch-test issues), `test_source` (test.S) and
+   `sail_config` (sail.json). The agent runs the tool itself and asks again with the
+   transcript; Codex keeps its own tools disabled. Every reply carries the hypothesis and the
+   best answer so far, so the last one stands when the budget runs out. The steps go into
+   `report.json` (`investigation`) and the AI analysis cell, and each step is one more AI
+   request.
 
 Measured on Megrez weekly #5 (30 failures): 20 signatures; 12 explained by rules and
 shared signatures without AI; 15 AI calls instead of 30, with questions about a third
@@ -205,6 +214,7 @@ workbook's AI analysis column. It is advisory and never changes a verdict.
   Secret Text credential `AI_TRIAGE_CREDENTIAL_ID` (default `openai-api-key`).
 - `AI_TRIAGE_MODEL`: blank uses the provider's default model.
 - `AI_TRIAGE_MAX_FAILURES`: cap on AI calls; `0` analyzes every failure.
+- `AI_TRIAGE_MAX_STEPS`: tool steps per AI analysis (default 3); `0` answers at once.
 
 If the AI cannot run (no `codex`, not logged in, no key), the job says why and
 runs deterministic triage only. `ci/triage/jenkins_triage.sh` holds that logic

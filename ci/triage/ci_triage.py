@@ -27,6 +27,7 @@ try:
     )
     from .memory import TriageMemory
     from . import casefile, vault
+    from .investigate import ACTIONS, Toolbox, investigate
     from . import spec as spec_index
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
@@ -37,6 +38,7 @@ except ImportError:  # run as a script from ci/triage
         failing_address, failure_signature, load_knowledge, rule_analysis, suggested_verdict,
     )
     from memory import TriageMemory  # type: ignore[no-redef]
+    from investigate import ACTIONS, Toolbox, investigate  # type: ignore[no-redef]
     import casefile  # type: ignore[no-redef]
     import spec as spec_index  # type: ignore[no-redef]
     import vault  # type: ignore[no-redef]
@@ -99,15 +101,20 @@ class AIConfig:
     timeout_seconds: int = 300
     max_output_tokens: int = 1800
     codex_bin: str = "codex"
+    max_steps: int = 3  # tool steps the AI may take to test its hypothesis (investigate.py)
 
 
 # The AI answers in this shape; format_ai_report turns it into the portal's AI analysis cell.
 AI_ANSWER_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["classification", "failure_reason", "root_cause", "confidence", "next_step",
-                 "spec_version", "spec_quote"],
+    "required": ["hypothesis", "action", "argument", "classification", "failure_reason",
+                 "root_cause", "confidence", "next_step", "spec_version", "spec_quote"],
     "properties": {
+        # One investigation step (investigate.py): a tool to run next, or "answer".
+        "hypothesis": {"type": "string"},
+        "action": {"type": "string", "enum": ACTIONS},
+        "argument": {"type": "string"},
         "classification": {"type": "string", "enum": [
             "DUT noncompliance", "Unsupported feature", "Test issue", "Firmware issue",
             "Reference-model mismatch", "Implementation-defined behavior", "Environment issue",
@@ -556,6 +563,8 @@ def analysis_report(analysis: dict[str, Any], source: str) -> str:
     if analysis.get("verdict"):
         who = f" by {analysis['confirmed_by']}" if analysis.get("confirmed_by") else ""
         extra.append(f"Verdict: {analysis['verdict']}{who}")
+    for step in analysis.get("investigation") or []:
+        extra.append(f"Step {step['step']}: {step['tool']} {step['argument']} (testing: {step['hypothesis']})")
     if analysis.get("checked"):
         extra.append(f"Checked: {analysis['checked']}")
     extra.append(f"Source: {source}")
@@ -620,6 +629,7 @@ def build_report(record: dict[str, Any], board_versions: dict[str, str]) -> dict
         "root_cause": analysis.get("root_cause", ""),
         "next_step": analysis.get("next_step", ""),
         "checked": analysis.get("checked", ""),
+        "investigation": analysis.get("investigation", []),
         "failure": ex.get("failure") or ex.get("damo_assert") or "",
         "check": ex.get("test_info", ""),
         "instruction": case.get("instruction") or {},
@@ -779,18 +789,29 @@ def run_triage(
             memory.related(board, lead["deterministic_category"], signature), grounding,
         )
         ai_calls += 1
+        toolbox = Toolbox(run_root, lead["case"], elf, knowledge,
+                          hypervisor=bool(spec_found.get("versions", {}).get("hypervisor")))
         try:
-            text, raw_response = analyzer(prompt, ai_config, api_key)
-            answer = check_answer(parse_answer(text), lead, spec_found.get("versions", {}),
+            text, raw_response, steps = investigate(
+                prompt, lambda question: analyzer(question, ai_config, api_key), toolbox,
+                max(0, ai_config.max_steps))
+            answer = parse_answer(text)
+            for key in ("action", "argument", "hypothesis"):
+                answer.pop(key, None)
+            if steps:
+                answer["investigation"] = [{k: step[k] for k in ("step", "hypothesis", "tool", "argument")}
+                                           for step in steps]
+            answer = check_answer(answer, lead, spec_found.get("versions", {}),
                                   has_instruction=bool(case_file.get("instruction")))
             metadata = {key: raw_response.get(key) for key in
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
-            metadata.update(prompt_chars=len(prompt), cluster_size=len(members),
+            metadata.update(prompt_chars=len(prompt), cluster_size=len(members), steps=steps,
+                            ai_requests=len(steps) + 1,
                             grounding=[k for k in ("source", "norms", "spec", "spec_versions", "isa", "known_issues",
                                                  "issues")
                                        if grounding.get(k)]
                             + [f"case:{k}" for k in case_file if k != "act_revision"])
-            source = "AI" + (f" (one analysis shared by {len(members)} tests with this failure signature)"
+            source = "AI" + (f" after {len(steps)} tool step(s)" if steps else "") + (f" (one analysis shared by {len(members)} tests with this failure signature)"
                              if len(members) > 1 else "")
             for member in members:
                 member.update(analysis=answer, source=source, ai_status="SUCCESS", metadata=metadata)

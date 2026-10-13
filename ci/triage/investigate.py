@@ -19,13 +19,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 try:
-    from . import casefile, sail_trace
+    from . import casefile, sail_trace, skills
     from . import spec as spec_index
     from .agent import as_int, disassembly
     from .context import related_issues
 except ImportError:  # run as a script from ci/triage
     import casefile  # type: ignore[no-redef]
     import sail_trace  # type: ignore[no-redef]
+    import skills  # type: ignore[no-redef]
     import spec as spec_index  # type: ignore[no-redef]
     from agent import as_int, disassembly  # type: ignore[no-redef]
     from context import related_issues  # type: ignore[no-redef]
@@ -43,7 +44,7 @@ TOOLS = {
     "test_source": "<label or text> lines of the generated test source (test.S) around it",
     "sail_config": "<words> the board's Sail settings (sail.json) that mention them",
 }
-ACTIONS = ["answer", *TOOLS]
+ACTIONS = ["answer", "skill", *TOOLS]
 CHALLENGE = ("Before this answer is accepted, check it: run at least one tool whose result would "
              "confirm or rule it out (for example what Sail did at the failing address, or what the "
              "board's spec version says about it), then answer.")
@@ -188,4 +189,119 @@ def investigate(prompt: str, ask: Callable[[str], tuple[str, dict[str, Any]]], t
             done.add((action, argument))
             result = toolbox.run(action, argument)
         steps.append({"step": len(steps) + 1, "hypothesis": str(reply.get("hypothesis") or "")[:400],
+                      "tool": action, "argument": argument[:200], "result": result})
+
+
+# ---------- skill-driven investigation (AI_TRIAGE_MODE=skills) ----------
+
+SKILL_REPLY = (
+    "Investigate like a verification engineer: observe the failure, understand the instruction, "
+    "keep two or three competing hypotheses, and load the skill (or run the tool) whose evidence "
+    "best separates them; stop when one hypothesis is confirmed and the others are ruled out. "
+    "Every reply is JSON with: hypothesis (the competing hypotheses and what the next step would "
+    "confirm or rule out), action (\"skill\" to load a skill, a tool name, or \"answer\"), "
+    "argument (the skill name, or the tool's input), evidence_ids (the ids, e.g. log.1, spec.2, "
+    "of the evidence your answer relies on; the answer must cite at least one, and a hardware "
+    "bug needs the observed behavior, the reference or test expectation, and the spec rule), and "
+    "your best answer so far in the answer fields."
+)
+
+
+class Investigation:
+    """Loaded skills and their evidence, with ids, for one failure."""
+
+    def __init__(self, ctx: "skills.SkillContext"):
+        self.ctx = ctx
+        self.loaded: list[str] = []
+        self.evidence: dict[str, str] = {}
+        self.tool_results = 0
+
+    def load(self, name: str) -> str:
+        if name not in skills.catalog():
+            return f"Unknown skill {name!r}; the skills are: {', '.join(skills.catalog())}."
+        if name in self.loaded:
+            return f"Skill {name} is already loaded; its evidence is above."
+        self.loaded.append(name)
+        for number, item in enumerate(skills.items_for(name, self.ctx), start=1):
+            self.evidence[f"{name}.{number}"] = item
+        return f"Loaded skill {name}."
+
+    def add_tool_result(self, tool: str, argument: str, result: str) -> str:
+        self.tool_results += 1
+        key = f"tool.{self.tool_results}"
+        self.evidence[key] = f"{tool} {argument}:\n{result}"
+        return key
+
+    def render(self) -> str:
+        parts = [f"[{key}] {text}" for key, text in self.evidence.items() if key.startswith("note.")]
+        for name in self.loaded:
+            meta = skills.catalog()[name]
+            parts.append(f"## Skill: {meta['title']} ({name})\n{meta['body']}\nEvidence:")
+            parts += [f"[{key}] {text}" for key, text in self.evidence.items() if key.startswith(name + ".")]
+        tools = [f"[{key}] {text}" for key, text in self.evidence.items() if key.startswith("tool.")]
+        if tools:
+            parts.append("## Tool results\n" + "\n".join(tools))
+        return "\n".join(parts)
+
+    def catalog_text(self, planned: list[str]) -> str:
+        rest = [n for n in skills.catalog() if n not in self.loaded]
+        lines = [f"  {n}: {skills.catalog()[n]['summary']}" for n in rest]
+        tools = sorted({t for n in self.loaded + rest for t in skills.catalog()[n].get("tools") or []})
+        suggestion = [n for n in planned if n not in self.loaded]
+        return ("Skills you can load (action \"skill\", argument = name):\n" + "\n".join(lines)
+                + (f"\nSuggested next, in order: {', '.join(suggestion)}." if suggestion else "")
+                + "\nTools (action = tool name): " + "; ".join(f"{t} {TOOLS[t]}" for t in tools if t in TOOLS))
+
+
+def investigate_skills(header: str, ctx: "skills.SkillContext", ask: Callable[[str], tuple[str, dict[str, Any]]],
+                       toolbox: Toolbox, max_steps: int, instructions_text: str
+                       ) -> tuple[str, dict[str, Any], list[dict[str, Any]], dict[str, str]]:
+    """The skill loop: the failure card and the first planned skill are loaded by code; then the
+    model loads skills or runs tools, one per reply, until it answers or the budget runs out.
+    Returns the last answer's text, the raw response, the steps and all evidence by id."""
+    inv = Investigation(ctx)
+    planned = skills.plan(ctx.evidence)
+    for name in (*skills.CARD, *planned[:1]):
+        inv.load(name)
+    steps: list[dict[str, Any]] = [{"step": 0, "hypothesis": "", "tool": "skill",
+                                    "argument": ", ".join(inv.loaded), "result": "loaded by code"}]
+    sent_back = False
+    while True:
+        left = max_steps - (len(steps) - 1)
+        budget = (f"You have {left} step(s) left." if left > 0 else
+                  "No steps are left: set action to \"answer\" and give your final answer.")
+        text, raw = ask("\n\n".join([header, inv.render(), inv.catalog_text(planned), instructions_text,
+                                     SKILL_REPLY, budget]))
+        try:
+            reply = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return text, raw, steps, inv.evidence
+        if not isinstance(reply, dict):
+            return text, raw, steps, inv.evidence
+        action = str(reply.get("action") or "answer")
+        argument = str(reply.get("argument") or "").strip()
+        if action == "answer" or left <= 0:
+            cited = [i for i in reply.get("evidence_ids") or [] if i in inv.evidence]
+            if left > 0 and not sent_back and (not cited or needs_check(reply)):
+                sent_back = True
+                why = ("it cites no evidence id" if not cited else
+                       f"it is {reply.get('classification')} with {reply.get('confidence')} confidence")
+                nxt = next((n for n in planned if n not in inv.loaded), "")
+                steps.append({"step": len(steps), "hypothesis": str(reply.get("root_cause") or "")[:400],
+                              "tool": "challenge", "argument": why,
+                              "result": "sent back: check it with a skill or tool"
+                                        + (f" (suggested: {nxt})" if nxt else "")})
+                inv.evidence[f"note.{len(steps)}"] = (
+                    f"Your answer was not accepted because {why}. " + CHALLENGE
+                    + (f" Suggested skill: {nxt}." if nxt else ""))
+                continue
+            return text, raw, steps, inv.evidence
+        if action == "skill":
+            result = inv.load(argument)
+        elif action in TOOLS:
+            output = toolbox.run(action, argument)
+            result = f"result as {inv.add_tool_result(action, argument, output)}"
+        else:
+            result = f"Unknown action {action!r}."
+        steps.append({"step": len(steps), "hypothesis": str(reply.get("hypothesis") or "")[:400],
                       "tool": action, "argument": argument[:200], "result": result})

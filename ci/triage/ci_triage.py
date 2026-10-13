@@ -27,7 +27,9 @@ try:
     )
     from .memory import TriageMemory
     from . import casefile, vault
-    from .investigate import ACTIONS, Toolbox, investigate
+    from .investigate import ACTIONS, Toolbox, investigate, investigate_skills
+    from .skills import SkillContext
+    from .agent import analysis_instructions
     from . import spec as spec_index
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
@@ -38,7 +40,9 @@ except ImportError:  # run as a script from ci/triage
         failing_address, failure_signature, load_knowledge, rule_analysis, suggested_verdict,
     )
     from memory import TriageMemory  # type: ignore[no-redef]
-    from investigate import ACTIONS, Toolbox, investigate  # type: ignore[no-redef]
+    from investigate import ACTIONS, Toolbox, investigate, investigate_skills  # type: ignore[no-redef]
+    from skills import SkillContext  # type: ignore[no-redef]
+    from agent import analysis_instructions  # type: ignore[no-redef]
     import casefile  # type: ignore[no-redef]
     import spec as spec_index  # type: ignore[no-redef]
     import vault  # type: ignore[no-redef]
@@ -102,19 +106,22 @@ class AIConfig:
     max_output_tokens: int = 1800
     codex_bin: str = "codex"
     max_steps: int = 3  # tool steps the AI may take to test its hypothesis (investigate.py)
+    mode: str = "single"  # "single": one evidence-rich question; "skills": skill-driven loop
 
 
 # The AI answers in this shape; format_ai_report turns it into the portal's AI analysis cell.
 AI_ANSWER_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["hypothesis", "action", "argument", "classification", "failure_reason",
+    "required": ["hypothesis", "action", "argument", "evidence_ids", "classification", "failure_reason",
                  "root_cause", "confidence", "next_step", "spec_version", "spec_quote"],
     "properties": {
         # One investigation step (investigate.py): a tool to run next, or "answer".
         "hypothesis": {"type": "string"},
         "action": {"type": "string", "enum": ACTIONS},
         "argument": {"type": "string"},
+        # Skill mode: the evidence ids (log.1, spec.2...) the answer relies on; [] otherwise.
+        "evidence_ids": {"type": "array", "items": {"type": "string"}},
         "classification": {"type": "string", "enum": [
             "DUT noncompliance", "Unsupported feature", "Test issue", "Firmware issue",
             "Reference-model mismatch", "Implementation-defined behavior", "Environment issue",
@@ -630,6 +637,7 @@ def build_report(record: dict[str, Any], board_versions: dict[str, str]) -> dict
         "next_step": analysis.get("next_step", ""),
         "checked": analysis.get("checked", ""),
         "investigation": analysis.get("investigation", []),
+        "evidence": analysis.get("evidence", []),
         "failure": ex.get("failure") or ex.get("damo_assert") or "",
         "check": ex.get("test_info", ""),
         "instruction": case.get("instruction") or {},
@@ -651,6 +659,14 @@ def build_report(record: dict[str, Any], board_versions: dict[str, str]) -> dict
         "act_revision": case.get("act_revision", ""),
         "signature": record.get("signature", ""),
     }
+
+
+def skill_header(lead: dict[str, Any], names: list[str], knowledge: dict[str, Any]) -> str:
+    """The opening of a skill-mode question: what failed where, and the board's verified facts."""
+    return (f"A RISC-V compliance test failed on real hardware (board {lead.get('board')}). "
+            f"{len(names)} test(s) fail the same way: {', '.join(names[:6])}"
+            + (" ..." if len(names) > 6 else "") + ".\n"
+            + "Board facts (verified): " + " ".join(knowledge.get("facts") or ["none recorded"])[:900])
 
 
 def run_triage(
@@ -783,18 +799,28 @@ def run_triage(
             "known_issues": vault.context_lines(members[0].get("known_issues") or []),
             "issues": related_issues(lead["case"], issue_terms(lead), exclude=known_ids),
         }
+        related = memory.related(board, lead["deterministic_category"], signature)
         prompt = compact_prompt(
             lead, names, knowledge,
             [] if snippet or case_file.get("instruction") else disassembly(elf, address),
-            memory.related(board, lead["deterministic_category"], signature), grounding,
+            related, grounding,
         )
         ai_calls += 1
         toolbox = Toolbox(run_root, lead["case"], elf, knowledge,
                           hypervisor=bool(spec_found.get("versions", {}).get("hypervisor")))
+        ask = lambda question: analyzer(question, ai_config, api_key)  # noqa: E731
+        evidence_ids = None
         try:
-            text, raw_response, steps = investigate(
-                prompt, lambda question: analyzer(question, ai_config, api_key), toolbox,
-                max(0, ai_config.max_steps))
+            if ai_config.mode == "skills":
+                header = skill_header(lead, names, knowledge)
+                text, raw_response, steps, found = investigate_skills(
+                    header, SkillContext(lead, case_file, grounding, knowledge, related), ask, toolbox,
+                    max(0, ai_config.max_steps), analysis_instructions())
+                evidence_ids = {key for key in found if not key.startswith("note.")}
+                prompt = header  # for the size metadata
+            else:
+                text, raw_response, steps = investigate(prompt, ask, toolbox, max(0, ai_config.max_steps))
+                found = {}
             answer = parse_answer(text)
             for key in ("action", "argument", "hypothesis"):
                 answer.pop(key, None)
@@ -802,10 +828,16 @@ def run_triage(
                 answer["investigation"] = [{k: step[k] for k in ("step", "hypothesis", "tool", "argument")}
                                            for step in steps]
             answer = check_answer(answer, lead, spec_found.get("versions", {}),
-                                  has_instruction=bool(case_file.get("instruction")))
+                                  has_instruction=bool(case_file.get("instruction")), evidence_ids=evidence_ids)
+            if evidence_ids is not None:
+                answer["evidence"] = [{"id": key, "text": found[key][:600]}
+                                      for key in answer.get("evidence_ids") or []]
+            else:
+                answer.pop("evidence_ids", None)
             metadata = {key: raw_response.get(key) for key in
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
             metadata.update(prompt_chars=len(prompt), cluster_size=len(members), steps=steps,
+                            mode=ai_config.mode,
                             ai_requests=len(steps) + 1,
                             grounding=[k for k in ("source", "norms", "spec", "spec_versions", "isa", "known_issues",
                                                  "issues")

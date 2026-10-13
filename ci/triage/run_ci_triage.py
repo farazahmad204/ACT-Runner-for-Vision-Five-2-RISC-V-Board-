@@ -42,6 +42,9 @@ def main() -> int:
     )
     parser.add_argument("--max-steps", type=int, default=int(os.environ.get("AI_TRIAGE_MAX_STEPS", "3")),
                         help="tool steps the AI may take to test its hypothesis; 0 answers at once")
+    parser.add_argument("--mode", choices=["single", "skills"],
+                        default=os.environ.get("AI_TRIAGE_MODE") or "single",
+                        help="single: one evidence-rich question; skills: skill-driven investigation")
     parser.add_argument("--timeout", type=int, default=300, help="seconds per AI request")
     parser.add_argument(
         "--memory",
@@ -69,6 +72,7 @@ def main() -> int:
             timeout_seconds=args.timeout,
             codex_bin=args.codex_bin,
             max_steps=args.max_steps,
+            mode=args.mode,
         ),
         api_key=os.environ.get("OPENAI_API_KEY", ""),
         max_ai_failures=args.max_ai_failures,

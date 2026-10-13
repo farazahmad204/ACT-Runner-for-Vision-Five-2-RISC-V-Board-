@@ -4,7 +4,8 @@
 #   jenkins_triage.sh RUN_ROOT STATE_ROOT BOARD_ID
 # Environment (the jobs' parameters): RUN_AI_TRIAGE (true/false), AI_TRIAGE_PROVIDER
 # (codex | openai), AI_TRIAGE_MODEL (blank = provider default), AI_TRIAGE_MAX_FAILURES
-# (0 = all), AI_TRIAGE_MAX_STEPS (tool steps per analysis, default 3), REFRESH_MEMORY (true: redo rule/AI answers; people's verdicts are kept),
+# (0 = all), AI_TRIAGE_MAX_STEPS (tool steps per analysis, default 3), AI_TRIAGE_MODE
+# (single | skills, default single), REFRESH_MEMORY (true: redo rule/AI answers; people's verdicts are kept),
 # OPENAI_API_KEY (openai only), CODEX_BIN.
 set -euo pipefail
 run_root="$1"
@@ -55,7 +56,7 @@ if [[ "${RUN_AI_TRIAGE:-false}" == true ]]; then
   if [[ -z "$reason" ]]; then
     args+=(--ai --provider "$provider" --codex-bin "$codex")
     [[ -z "${AI_TRIAGE_MODEL:-}" ]] || args+=(--model "$AI_TRIAGE_MODEL")
-    echo "AI triage: provider=$provider model=${AI_TRIAGE_MODEL:-default}"
+    echo "AI triage: provider=$provider model=${AI_TRIAGE_MODEL:-default} mode=${AI_TRIAGE_MODE:-single}"
   else
     echo "AI triage skipped: $reason. Running deterministic triage only."
   fi

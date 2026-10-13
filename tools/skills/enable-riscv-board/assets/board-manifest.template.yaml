@@ -1,0 +1,51 @@
+schema_version: 1
+board:
+  id: replace_me
+  vendor: null
+  name: null
+  soc: null
+  revision: null
+  physical_available: false
+  evidence_status: unknown
+cpu:
+  isa: null
+  hart_count: null
+  runner_hart_id: null
+  monitor_hart_id: null
+  boot_hart_id: null
+  boot_privilege: null
+  evidence_status: unknown
+memory:
+  dram_base: null
+  dram_bytes: null
+  usable_limit: null
+  firmware_load_address: null
+  stack_bytes: null
+  staging_address: null
+  staging_max_bytes: null
+  reserved_regions: []
+  evidence_status: unknown
+uart:
+  controller: null
+  base: null
+  size: null
+  register_width: null
+  input_clock_hz: null
+  initialization_owner: null
+  baud: 115200
+  serial_device: null
+  bidirectional_validated: false
+  evidence_status: unknown
+timer:
+  mtime_address: null
+boot:
+  medium: null
+  image_format: null
+  packaging_command: null
+  install_command: null
+  recovery_procedure: null
+  evidence_status: unknown
+sources: []
+readiness:
+  state: researching
+  blockers: []

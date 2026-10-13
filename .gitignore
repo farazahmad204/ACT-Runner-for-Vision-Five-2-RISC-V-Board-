@@ -40,9 +40,11 @@ docs/*.pptx
 docs/*.drawio
 docs/*.png
 docs/*.svg
-/tools/
+/tools/*
+!/tools/skills/
 docs/*.pptx
 docs/*.drawio
 docs/*.png
 docs/*.svg
-/tools/
+/tools/*
+!/tools/skills/

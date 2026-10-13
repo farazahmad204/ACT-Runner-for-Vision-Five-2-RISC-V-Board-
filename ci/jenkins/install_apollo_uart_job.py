@@ -58,6 +58,10 @@ JOB_CONFIGS = {
         "Jenkinsfile.board-health",
         "ci/jenkins/job-config-board-health.xml",
     ),
+    "riscv-board-pipeline": (
+        "Jenkinsfile.board-pipeline",
+        "ci/jenkins/job-config-board-pipeline.xml",
+    ),
 }
 
 

@@ -1,0 +1,27 @@
+/dts-v1/;
+
+/ {
+  description = "{{DESCRIPTION}}";
+  #address-cells = <{{ADDRESS_CELLS}}>;
+
+  images {
+    {{IMAGE_NODE}} {
+      description = "{{IMAGE_DESCRIPTION}}";
+      data = /incbin/("firmware.bin");
+      type = "firmware";
+      arch = "riscv";
+      os = "{{OS}}";
+      compression = "none";
+      load = <{{LOAD_CELLS}}>;
+      entry = <{{LOAD_CELLS}}>;
+{{HASH_NODE}}    };
+  };
+
+  configurations {
+    default = "{{CONFIG_NAME}}";
+    {{CONFIG_NAME}} {
+      description = "Minimal UART runner config";
+      firmware = "{{IMAGE_NODE}}";
+    };
+  };
+};

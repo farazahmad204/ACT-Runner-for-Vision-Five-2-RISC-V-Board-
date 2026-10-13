@@ -1,0 +1,23 @@
+schema_version: 2
+board_id: replace_me
+agent_role: boot_image # boot_image | runner_contract | ddr_placement
+generated_at: null
+source_revisions:
+  - name: replace_me
+    url_or_path: replace_me
+    revision: null
+    source_type: vendor_documentation # vendor_documentation | vendor_source | project_source | boot_log | community
+evidence:
+  # Repeat this record for every fact ID assigned to agent_role in
+  # references/research-scope.md. Use evidence_status: unknown when unresolved.
+  - id: boot.medium
+    claim: replace_me
+    value: null
+    source: replace_me
+    revision: null
+    evidence_status: unknown
+    impact: replace_me
+    open_question: replace_me
+blockers: []
+conflicts: []
+recommendations: []

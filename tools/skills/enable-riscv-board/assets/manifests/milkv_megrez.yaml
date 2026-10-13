@@ -1,0 +1,176 @@
+schema_version: 1
+board:
+  id: milkv_megrez_eic7700x
+  vendor: Milk-V
+  name: Megrez
+  soc: ESWIN EIC7700X
+  revision: V1.1
+  physical_available: true
+  evidence_status: confirmed
+cpu:
+  isa: rv64gbch
+  hart_count: 4
+  runner_hart_id: 1
+  monitor_hart_id: 2
+  boot_hart_id: 1
+  boot_hart_selection: observed_stock_boot
+  observed_boot_hart_id: 1
+  boot_privilege: M
+  evidence_status: partial
+memory:
+  dram_base: 0x80000000
+  dram_bytes: 34359738368
+  target_installed_bytes: 34359738368
+  usable_limit: 0xc8000000
+  firmware_load_address: 0x80000000
+  stack_bytes: 0x4000
+  runner_limit: 0x80080000
+  payload_base: 0x90000000
+  payload_limit: 0xb0000000
+  staging_address: 0xc0000000
+  staging_max_bytes: 0x08000000
+  reserved_regions:
+    - name: mmode_firmware
+      start: 0x80000000
+      bytes: 0x00080000
+      status: confirmed_by_opensbi_and_linux_iomem
+    - name: d0_pmp_secure_flat
+      start: 0xb0000000
+      bytes: 0x10000000
+      status: source_implied_needs_compiled_dtb_confirmation
+    - name: lpcpu_reserved
+      start: 0xdfff0000
+      bytes: 0x00010000
+      status: confirmed_in_megrez_dts
+    - name: display_reserved
+      start: 0xe0000000
+      bytes: 0x01000000
+      status: confirmed_in_megrez_dts
+  normal_boot_load_windows:
+    - name: opensbi_fw_payload
+      start: 0x80000000
+      note: Signed boot-chain component; contains OpenSBI and U-Boot in the normal image.
+    - name: uboot_text_and_default_load
+      start: 0x80200000
+    - name: kernel
+      start: 0x84000000
+    - name: fdt
+      start: 0x88000000
+    - name: fastboot_buffer
+      start: 0x90000000
+      bytes: 0x10000000
+    - name: compressed_kernel
+      start: 0x98300000
+      bytes: 0x10000000
+  evidence_status: partial
+uart:
+  controller: synopsys_uart0_8250_family
+  base: 0x50900000
+  size: 0xffff
+  register_width: 2
+  register_shift: 2
+  input_clock_hz: 200000000
+  initialization_owner: minimal_runner_matching_rockos_opensbi_uart8250_init
+  baud: 115200
+  serial_device: /dev/serial/by-path/pci-0000:00:14.0-usb-0:4.2:1.0-port0
+  serial_device_note: Onboard CH340B (U138) behind the USB-C debug port. Its TXD drives UART0_RX, so an external USB-TTL adapter cannot transmit to the board while USB-C is connected. See artifacts/onboarding/milkv_megrez_20261002/onboard_debug_uart/observation.md.
+  bidirectional_validated: true
+  evidence_status: confirmed
+timer:
+  mswi_base: 0x02000000
+  mtimecmp_base: 0x02004000
+  mtime_address: 0x0200bff8
+boot:
+  medium: spi_bootchain_with_os_on_sd
+  normal_chain: ESWIN_ROM_or_SCPU -> SPI_bootchain -> sys_init -> DDR_firmware -> OpenSBI_M_mode -> U-Boot_S_mode -> RockOS_from_SD
+  runner_chain: ESWIN_ROM_or_SCPU -> SPI_bootchain -> sys_init -> DDR_firmware -> minimal_runner_M_mode
+  image_format: eswin_nsign_bootchain_bin
+  payload_load_address: 0x80000000
+  payload_entry_address: 0x80000000
+  packaging_command: cp <runner.bin> <rockos-opensbi>/sign/preload/fw_payload.bin && cd <rockos-opensbi>/sign/preload && sed -e 's#HOLDER#<absolute-preload-dir>#g' -e 's#ddr_fw#ddr_fw#g' bootchain.cfg > bootchain.runner.cfg && ../nsign bootchain.runner.cfg
+  install_command: ext4load usb 0 0x90000000 <bootchain.bin>; es_burn write 0x90000000 flash
+  recovery_procedure: Hold the Recovery button while powering on, connect the USB-C port until ESWIN-2030 appears as USB storage, copy the official Megrez bootloader binary to start temporary U-Boot, then restore a known-good bootloader to SPI with es_burn.
+  destructive_install_requires_human_approval: true
+  runner_payload_substitution_validated: true  # Recovery-USB (2026-10-02) and persistent SPI (2026-10-03)
+  runner_payload_substitution_offline_packaged: true
+  payload_handoff_contract_validated: true  # runner entered at 0x80000000 in M-mode on harts 1/2
+  opensbi_platform_initialization_owner: not_required_by_default_investigate_only_if_hardware_fails
+  linux_boot_validated: true
+  evidence_status: partial
+power:
+  remote_control_available: true
+  backend: null
+  device_name: null
+  validated: false
+  evidence_status: partial
+hypervisor:
+  isa_h_documented: true
+  csr_probe_validated: false
+  test_suite_url: https://github.com/riscv/riscv-arch-test/tree/hypervisor
+  repository: https://github.com/riscv/riscv-arch-test.git
+  branch: hypervisor
+  inspected_revision: dd2bcb28fc74997c5ba74bc129acf9fd4397e40e
+  execution_model: act_tsbi_bare_metal_mmode_entry
+  mode_transition_owner: act_tsbi
+  runner_profile: ACT_M_MIN
+  smoke_validated: false
+  evidence_status: partial
+sources:
+  - kind: official_board_overview
+    url: https://milkv.io/docs/megrez/overview
+  - kind: official_board_resources
+    url: https://milkv.io/docs/megrez/getting-started/resources
+  - kind: official_boot_and_recovery
+    url: https://milkv.io/docs/megrez/getting-started/boot
+  - kind: official_soc_manual_releases
+    url: https://github.com/eswincomputing/EIC7700X-SoC-Technical-Reference-Manual/releases
+  - kind: platform_opensbi_source
+    url: https://github.com/rockos-riscv/rockos-opensbi/tree/7afdf03136285cf1319dd49f78a91d0a2569bdd5
+  - kind: platform_bootchain_configuration
+    url: https://github.com/rockos-riscv/rockos-opensbi/blob/7afdf03136285cf1319dd49f78a91d0a2569bdd5/sign/preload/bootchain.cfg
+  - kind: platform_bootchain_build_workflow
+    url: https://github.com/rockos-riscv/rockos-opensbi/blob/7afdf03136285cf1319dd49f78a91d0a2569bdd5/.github/workflows/payload.yml
+  - kind: platform_uboot_megrez_device_tree
+    url: https://github.com/rockos-riscv/rockos-u-boot/blob/444734713e1dc65a525093999830f5bc12fd2b7c/arch/riscv/dts/eic7700-milkv-megrez.dts
+  - kind: platform_uboot_soc_device_tree
+    url: https://github.com/rockos-riscv/rockos-u-boot/blob/444734713e1dc65a525093999830f5bc12fd2b7c/arch/riscv/dts/eic770x.dtsi
+  - kind: platform_uboot_uart_driver
+    url: https://github.com/rockos-riscv/rockos-u-boot/blob/444734713e1dc65a525093999830f5bc12fd2b7c/drivers/serial/serial_synopsys.c
+  - kind: official_act_hypervisor_branch
+    url: https://github.com/riscv/riscv-arch-test/tree/hypervisor
+  - kind: community_lead_unverified
+    url: https://gist.github.com/yaneti/653c880ef732ab04bc65ee1fc6bfaa9f
+offline_build:
+  profile: UART_M_MODE
+  transport: uart_stream
+  advertised_build_id: megrez-uart-v4-20261002
+  entry_address: 0x80000000
+  firmware_end: 0x8004f3d0
+  firmware_limit: 0x80080000
+  packaged_image: artifacts/onboarding/milkv_megrez_20261002/hardware_smoke_v4/megrez-uart-v4-recovery.bin
+  packaged_image_sha256: bc5f5774467b426ade180a848ebb6415e7fb37cda55ecd5ab64c33c803ef65bb
+  source: stable 1230bf8 + patches/megrez-runner-v3.patch + hardware_smoke_v4/megrez-v4-delta-on-v3.patch
+  linker_map_checked: true
+  nsign_packaged: true
+  uart_16bit_instructions_checked: true
+  uart_8250_initialization_checked: true
+  host_protocol_tests_passed: true
+
+hardware_smoke:
+  evidence: artifacts/onboarding/milkv_megrez_20261002/hardware_smoke_v4/observation.md
+  boot_path: recovery_usb_eswin_2030
+  spi_install:
+    evidence: artifacts/onboarding/milkv_megrez_20261002/spi_install/README.md
+    method: official U-Boot (Recovery USB), loady over the onboard UART, CRC check, es_burn write 0x90000000 flash
+    image_sha256: bc5f5774467b426ade180a848ebb6415e7fb37cda55ecd5ab64c33c803ef65bb
+    clean_spi_boots_passed: 2
+    restore_image: bootloader_milkv-megrez-2025-0102.bin sha256 2f660235fcd23eb8ef0304321d486f1fbb407afb5bc4922f9ef63c81b2dccf77 (rehearsed to RAM, CRC fbd3556d)
+  image_sha256: bc5f5774467b426ade180a848ebb6415e7fb37cda55ecd5ab64c33c803ef65bb
+  elf: artifacts/onboarding/milkv_megrez_20261002/hardware_candidate/smoke_payload.elf
+  clean_boots_passed: 2
+  result: DONE status=PASS tohost=0x1 on both boots
+  mtime_hz_measured: 1000000
+readiness:
+  state: hardware_smoke_passed
+  blockers:
+    - No validated remote power/reset backend; boots require a manual power cycle.

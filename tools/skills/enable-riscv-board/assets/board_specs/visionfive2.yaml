@@ -1,0 +1,61 @@
+# ACT board spec for gen_act_config.py: StarFive VisionFive 2 (JH7110, SiFive U74).
+# Values from the reviewed hand-made config (ACT config/cores/sifive_u74).
+dut:
+  name: visionfive2-rv64gc
+  vendor_dir: sifive_u74
+  description: StarFive VisionFive 2, JH7110, SiFive U74 (hart 1 runs ACT payloads).
+isa: rv64imafdc_zicntr_zicsr_zifencei_zihpm_zba_zbb
+privilege_modes: [M, S, U]
+extra_extensions: [Sscounterenw, Sstvecd, Ssu64xl]
+virtual_memory: [sv39]
+priv_version: "1.11"
+test_hart: 1
+memory: {base: 0x80000000, size: 0x80000000}
+platform:
+  cpu_hz_max: 1500000000
+  mtime_hz: 4000000
+  cache_block_bytes: 64
+  access_fault_address: 0x0
+  clint: {base: 0x02000000}
+  plic:
+    base: 0x0c000000
+    sources: 136
+    test_hart_contexts: {m: 1, s: 2}
+  uart: {base: 0x10000000, reg_shift: 2, access_bytes: 1, plic_source: 32}
+  ids: {mvendorid: 0x489, marchid: 0x8000000000000007, mimpid: 0x4210427}
+csr:
+  phys_addr_bits: 36
+  asid_bits: 0
+  pmp: {entries: 8, encoding_entries: 16, granularity_bytes: 4096, na4: false, tor: true, napot: true}
+  hpm_counters: [3, 4]
+  hpm_counter_width: 40
+  hpm_inhibit: false
+  time_csr_implemented: false
+  mtvec: {modes: [0, 1], vectored_alignment: 256}
+  stvec: {modes: [0, 1], vectored_alignment: 256}
+  medeleg_writable: 0xB15D
+  mideleg_writable: 0x222
+# ---- runner board layer (gen_board_files.py) ----
+# The production VF2 preset sets no payload window, so the runner accepts ELF
+# segments anywhere in RAM (0x40000000-0x100000000) and the ACT link window
+# 0x80000000+2 GiB above is narrower. runner.payload_window keeps that layout.
+runner:
+  board_id: vf2_jh7110
+  description: StarFive VisionFive2 / JH7110
+  platform_id: 1
+  monitor_hart: 2
+  load_address: 0x40000000
+  ram: {base: 0x40000000, limit: 0x100000000}
+  payload_window: {base: 0x40000000, limit: 0x100000000}
+  staging: {address: 0x88000000, max_bytes: 134217728}
+  tohost_fallback: 0x41008000
+  uart: {size: 0x1000, access_bytes: 4, baud: 115200}
+  external_irq_cleanup: true
+  watchdog: {base: 0x13070000, load: 0x000, ctrl: 0x008, lock: 0xc00, unlock_key: 0x1acce551}
+  serial_dev: /dev/ttyUSB0
+  toolchain_dir: /home/lpt-10xe/riscv64/bin
+boot:
+  pattern: fit
+  image: uboot_part2_new.bin
+  fit: {source: vf2_act4.its, pad_bytes: 4194304, description: Minimal UART ELF runner for JH7110 VisionFive2,
+        image_description: vf2-uart-elf-runner}

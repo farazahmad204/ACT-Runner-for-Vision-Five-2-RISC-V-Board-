@@ -1,0 +1,4 @@
+interface:
+  display_name: "RISC-V Hardware CI"
+  short_description: "Bring up the common UART runner on a new RISC-V board"
+  default_prompt: "Use $enable-riscv-board. Follow its phase table and stop at the first failed gate. Start with system_inventory.py and validate_workspace_contract.py, then run collect_board_facts.py on the vendor DTB and stock boot logs; research only the facts it leaves unknown, citing the underlying documents. Read references/bringup-pitfalls.md before debugging hardware. Ask before flashing, power control, pushing or opening PRs."

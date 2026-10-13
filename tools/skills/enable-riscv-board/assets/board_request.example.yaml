@@ -1,0 +1,36 @@
+# Board request for scripts/board_pipeline.py: the fields a portal form would
+# submit. Relative paths are relative to this file. This example is Milk-V
+# Megrez, with the inputs used during its 2026-10 bring-up.
+board_id: milkv_megrez_eic7700x
+board_name: Milk-V Megrez (ESWIN EIC7700X, SiFive P550)
+isa: rv64imafdch_zicntr_zicsr_zifencei_zihpm_zba_zbb_sscofpmf
+docs_quality: complete            # complete | vague | none
+runner_hart: 1
+
+# Evidence
+documents:                        # searched locally by fill_gaps.py
+  - /home/lpt-10xe/megrez-deps/official/trm/Part1.pdf
+  - /home/lpt-10xe/megrez-deps/official/Megrez_V1.1_Schematic_20250108.pdf
+dtb: /home/lpt-10xe/megrez-deps/official/eic7700-milkv-megrez-no-npu.dtb
+boot_logs:                        # stock boot UART logs
+  opensbi: ../../../../artifacts/onboarding/milkv_megrez_20261002/spi_install/rehearsal3/uart_raw.log
+  linux: ../../../../artifacts/onboarding/milkv_megrez_20261002/normal_mode_rx/uart_raw.log
+user_answers: ../../../../artifacts/onboarding/milkv_megrez_20261003/requirements/user_answers.yaml
+manifest: manifests/milkv_megrez.yaml
+research_dirs:
+  - ../../../../artifacts/onboarding/milkv_megrez_20261001/research_v2
+
+# Reviewed values (optional). Without it the spec is built from evidence only.
+base_spec: board_specs/milkv_megrez.yaml
+
+# Build inputs
+runner_checkout: /home/lpt-10xe/vf2_mmode_fw_Final_version_Verified.worktrees/megrez-uart-runner
+act_checkout: /home/lpt-10xe/act-megrez-config
+runner_build_id: megrez-pipeline-check
+package: false                    # true needs the vendor packaging tree (MEGREZ_NSIGN_ROOT)
+
+# Model use (fill_gaps only; also needs --allow-model-calls on the command line)
+model:
+  enabled: true
+  escalate: null                  # e.g. sonnet
+  budget_tokens: 150000

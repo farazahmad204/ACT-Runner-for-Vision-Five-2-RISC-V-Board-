@@ -1,0 +1,30 @@
+# Board spec for Banana Pi BPI-F3 (SpacemiT K1). Runner layer only: the ACT
+# section (isa, csr, ...) is not written yet, so gen_act_config.py cannot use it.
+test_hart: 0
+memory: {base: 0x04000000, size: 0x7C000000}      # runner payload window (production preset: whole RAM)
+platform:
+  clint: {base: 0xE4000000}
+  plic:
+    base: 0xE0000000
+    test_hart_contexts: {m: 0, s: 1}
+  uart: {base: 0xD4017000, plic_source: 42}
+runner:
+  board_id: bpif3_k1
+  description: Banana Pi BPI-F3 / SpacemiT K1
+  platform_id: 2
+  monitor_hart: 1
+  load_address: 0x04000000
+  ram: {base: 0x04000000, limit: 0x80000000}
+  staging: {address: 0x0C200000, max_bytes: 134217728}
+  tohost_fallback: 0x04100000
+  uart: {size: 0x1000, access_bytes: 1, baud: 115200}
+  external_irq_cleanup: true
+  watchdog: null
+  k1_hart_wakeup: true
+  serial_dev: /dev/ttyUSB0
+boot:
+  pattern: fit
+  image: bpif3_opensbi.itb
+  fit: {source: bpif3_opensbi.its, address_cells: 2, image_node: opensbi, os: opensbi, crc32: true,
+        config_name: config_1, description: Minimal UART ELF runner for BPI-F3 (SpacemiT K1),
+        image_description: bpif3-uart-elf-runner}

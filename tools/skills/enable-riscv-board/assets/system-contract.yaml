@@ -1,0 +1,60 @@
+schema_version: 1
+
+repositories:
+  runner:
+    canonical_url: https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git
+    accepted_origins:
+      - https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git
+      - git@github.com:farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git
+    stable_branch: vf2-uart-stream-jenkins
+    stable_remote_ref: refs/remotes/origin/vf2-uart-stream-jenkins
+    production_profile: UART_M_MODE
+    build_entrypoint: cert_harness/tools/build_runner.sh
+    profile_file: cert_harness/profiles/UART_M_MODE.env
+    board_environment_pattern: cert_harness/boards/{board}.env
+    board_linker_pattern: cert_harness/boards/{board}/link.ld
+    board_adapter_pattern: cert_harness/board_adapters/{board}.sh
+  act:
+    canonical_url: https://github.com/Arshia2564/riscv-arch-test.git
+    stable_branch: sifive_u74
+  portal:
+    canonical_url: https://github.com/farazahmad204/RISC-V-CI-Django-Web-Portal.git
+
+toolchain:
+  required_sail_version: 0.14.1
+
+review:
+  allowed_paths:
+    - AGENTS.md
+    - Jenkinsfile.board-onboarding
+    - Makefile.act
+    - act_core.c
+    - runner_shared.h
+    - runner_uart_stream.c
+    - cert_harness/tools/build_runner.sh
+    - ci/jenkins/README.md
+    - ci/jenkins/install_apollo_uart_job.py
+    - ci/jenkins/job-config-board-onboarding.xml
+  allowed_path_prefixes:
+    - cert_harness/boards/
+    - cert_harness/board_adapters/
+    - tools/skills/enable-riscv-board/
+    - artifacts/onboarding/
+  ignored_generated_paths:
+    - firmware.elf
+    - firmware.bin
+    - firmware.dis
+    - firmware.map
+    - config.txt
+  ignored_generated_prefixes:
+    - cert_harness/build/
+    - out/
+
+authority:
+  local_read_research: automatic
+  local_feature_workspace_edit_build_test: automatic
+  create_local_branch: automatic
+  push_or_open_pull_request: approval_required
+  flash_or_modify_boot_storage: approval_required
+  power_or_reset_physical_board: approval_required
+  modify_jenkins_or_portal_production: approval_required

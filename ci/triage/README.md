@@ -66,7 +66,9 @@ stored in memory; only a person's verdict outranks the note):
    board's spec versions), `issues` (riscv-arch-test issues), `test_source` (test.S) and
    `sail_config` (sail.json). The agent runs the tool itself and asks again with the
    transcript; Codex keeps its own tools disabled. Every reply carries the hypothesis and the
-   best answer so far, so the last one stands when the budget runs out. The steps go into
+   best answer so far, so the last one stands when the budget runs out. A first answer that
+   claims a hardware bug, or is Inconclusive or low confidence, is sent back once: it needs
+   at least one tool check before it is accepted. The steps go into
    `report.json` (`investigation`) and the AI analysis cell, and each step is one more AI
    request.
 

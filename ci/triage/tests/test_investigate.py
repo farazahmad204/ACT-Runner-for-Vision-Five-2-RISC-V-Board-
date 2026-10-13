@@ -56,6 +56,26 @@ class InvestigateTests(unittest.TestCase):
         self.assertIn("already ran this", steps[1]["result"])
         self.assertIn("no tool steps are left", prompts[-1])
 
+    def test_a_hardware_bug_claim_is_checked_before_it_is_accepted(self):
+        bug = json.dumps({**ANSWER, "classification": "DUT noncompliance", "confidence": "high",
+                          "action": "answer", "argument": "", "hypothesis": "h"})
+        replies = iter([bug, reply("test_source", "check_mstatus"), bug])
+        with tempfile.TemporaryDirectory() as temporary:
+            toolbox = Toolbox(run_dir(Path(temporary)), "Sm-00", None, {})
+            prompts = []
+
+            def ask(prompt):
+                prompts.append(prompt)
+                return next(replies), {}
+
+            _text, _raw, steps = investigate("evidence", ask, toolbox, 3)
+        self.assertEqual([s["tool"] for s in steps], ["challenge", "test_source"])
+        self.assertIn("Before this answer is accepted", prompts[1])
+        self.assertEqual(len(prompts), 3)  # the second answer stands: one challenge only
+        # Without a step budget the first answer stands.
+        _text, _raw, steps = investigate("evidence", lambda p: (bug, {}), toolbox, 0)
+        self.assertEqual(steps, [])
+
     def test_unknown_tools_and_plain_text_end_safely(self):
         with tempfile.TemporaryDirectory() as temporary:
             toolbox = Toolbox(run_dir(Path(temporary)), "Sm-00", None, {})

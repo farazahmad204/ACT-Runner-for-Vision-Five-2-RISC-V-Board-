@@ -111,6 +111,15 @@ def load_tuya_env(config: Path, device_name: str | None) -> dict[str, str]:
     return env
 
 
+def payload_started(log_path: Path) -> bool:
+    """The runner received the ELF and began executing it (so a missing result is a timeout of
+    the program, not a transport failure)."""
+    if not log_path.exists():
+        return False
+    text = log_path.read_bytes()
+    return b"[UART_STREAM] RX_OK" in text and b"[CASE] START" in text
+
+
 def parse_done(log_path: Path) -> tuple[str, str, str] | None:
     matches = list(DONE_RE.finditer(log_path.read_bytes()))
     if not matches:
@@ -252,6 +261,13 @@ def main() -> int:
             process_returncode = process.returncode
             done = parse_done(log_path) if log_path.exists() else None
             if done is not None:
+                break
+            if payload_started(log_path):
+                # The runner received the ELF and started it, but it never finished within the
+                # result timeout: the program hangs (no tohost write). Retrying cannot change
+                # that and holds the board for another timeout, so report TIMEOUT now.
+                done = (case_name, "TIMEOUT", "")
+                print(f"[UART_BATCH] NO_RETRY index={index} name={case_name} reason=payload_started_no_result")
                 break
             if attempt < max_attempts:
                 print(

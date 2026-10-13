@@ -167,6 +167,20 @@ class CollectBoardFactsTests(unittest.TestCase):
         self.assertIn("must initialize the UART", report["facts"]["uart.initialization_owner"]["value"])
 
 
+class OpenSbiLogTests(unittest.TestCase):
+    def test_indented_web_copy_and_domain_harts(self):
+        # A boot log copied from a web page: every line indented, blank lines between.
+        log = ("\n Platform HART Count : 4 \n\n Domain0 HARTs : 0*,1*,2*,3* \n\n"
+               " Domain0 Region00 : 0x0000000080000000-0x000000008007ffff M: (R,W,X) S/U: () \n"
+               " Boot HART ID : 2 \n Boot HART Priv Version : v1.11 \n")
+        facts = {f.id: f for f in cbf.from_opensbi(log, "log")}
+        self.assertEqual(facts["runner.stock_firmware_harts"].value, [0, 1, 2, 3])
+        self.assertEqual(facts["runner.stock_firmware_harts"].evidence_status, "inferred")
+        self.assertEqual(facts["identity.priv_version"].value, "v1.11")
+        self.assertEqual(facts["runner.observed_boot_hart"].value, 2)
+        self.assertIn("memory.firmware_window", facts)
+
+
 class CsrProbeDecodeTests(unittest.TestCase):
     def test_decode_findings(self):
         import csr_probe

@@ -4,7 +4,7 @@
 #   jenkins_triage.sh RUN_ROOT STATE_ROOT BOARD_ID
 # Environment (the jobs' parameters): RUN_AI_TRIAGE (true/false), AI_TRIAGE_PROVIDER
 # (codex | openai), AI_TRIAGE_MODEL (blank = provider default), AI_TRIAGE_MAX_FAILURES
-# (0 = all), REFRESH_MEMORY (true: redo rule/AI answers; people's verdicts are kept),
+# (0 = all), AI_TRIAGE_MAX_STEPS (tool steps per analysis, default 3), REFRESH_MEMORY (true: redo rule/AI answers; people's verdicts are kept),
 # OPENAI_API_KEY (openai only), CODEX_BIN.
 set -euo pipefail
 run_root="$1"

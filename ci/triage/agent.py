@@ -6,7 +6,8 @@ For each failure the agent tries, in order, and stops at the first that explains
   2. rules       a measured board fact or a value-diff mechanism proves the cause (0 tokens)
   3. AI          one compact question per *signature cluster*, not per test, with the
                  evidence, the value diff, a disassembly window and related past findings;
-                 the answer is checked against the evidence, then remembered
+                 the AI may test its hypothesis with read-only tools (investigate.py); the
+                 answer is checked against the evidence, then remembered
 
 A failure signature is the normalized evidence without test-specific addresses, so the
 same mechanism in many tests (or in many runs) is analyzed once.

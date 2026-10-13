@@ -61,7 +61,7 @@ def fake_codex(folder: Path, answer: dict) -> Path:
 class FindBoardDocsTests(unittest.TestCase):
     def args(self, **kw) -> argparse.Namespace:
         base = dict(board="Vendor Board", soc="EIC9999", board_id="vendor_eic9999", max_docs=25,
-                    clone_repos=False)
+                    clone_repos=False, dt_fallback=False)
         return argparse.Namespace(**{**base, **kw})
 
     def test_links_are_checked_and_saved_by_type(self) -> None:
@@ -100,6 +100,27 @@ class FindBoardDocsTests(unittest.TestCase):
         self.assertEqual(record["file"], "01_1_TRM_Part1.pdf")
         self.assertEqual(record["extra_files"], ["01_2_TRM_Part2.pdf"])
         self.assertIn("eic7700", fbd.keywords_for("Milk-V Megrez", "ESWIN EIC7700X", "milkv_megrez"))
+
+    def test_device_tree_fallback_only_looks_in_vendor_accounts(self) -> None:
+        accounts = {"milkv-megrez": [{"name": "megrez-files", "clone_url": "https://g/milkv-megrez/megrez-files.git"},
+                                     {"name": "megrez-docs", "clone_url": "https://g/milkv-megrez/megrez-docs.git"}],
+                    "milkv": [{"name": "duo-buildroot-sdk", "clone_url": "https://g/milkv/duo-buildroot-sdk.git"},
+                              {"name": "milkv.io", "clone_url": "https://g/milkv/milkv.io.git"}]}
+
+        def get(url):
+            owner = url.split("/users/")[1].split("/")[0]
+            if owner not in accounts:
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            return json.dumps(accounts[owner] if url.endswith("per_page=100") else {"login": owner}).encode(), ""
+
+        owners = fbd.guessed_owners("Milk-V Megrez", get)
+        self.assertEqual(owners, ["milkv-megrez", "milkv"])  # milk-v does not exist
+        words = fbd.model_words("Milk-V Megrez", "ESWIN EIC7700X (SiFive P550)")
+        self.assertEqual(words[:2], ["megrez", "eic7700"])
+        self.assertEqual(fbd.candidate_repos(owners, words, get),
+                         ["https://g/milkv-megrez/megrez-files.git", "https://g/milkv/duo-buildroot-sdk.git"])
+        self.assertFalse(fbd.has_device_tree([{"status": "saved", "file": "trm.pdf"}]))
+        self.assertTrue(fbd.has_device_tree([{"status": "saved", "file": "x.txt", "extra_files": ["b.dtb"]}]))
 
     def test_search_runs_codex_with_web_search_and_no_other_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

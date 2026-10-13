@@ -280,7 +280,8 @@ def clean(text: str) -> str:
 
 def from_opensbi(text: str, src: str) -> list[Fact]:
     facts: list[Fact] = []
-    kv = dict(re.findall(r"^(Platform Name|Platform HART Count|Platform IPI Device|Platform Timer Device|"
+    # Logs copied from web pages often indent every line: allow leading spaces.
+    kv = dict(re.findall(r"^[ \t]*(Platform Name|Platform HART Count|Platform IPI Device|Platform Timer Device|"
                          r"Platform Console Device|Firmware Base|Firmware Size|Boot HART ID|Boot HART Base ISA|"
                          r"Boot HART ISA Extensions|Boot HART Priv Version|Boot HART PMP Count|"
                          r"Boot HART PMP Granularity|Boot HART PMP Address Bits|Boot HART MHPM Info|"
@@ -313,7 +314,14 @@ def from_opensbi(text: str, src: str) -> list[Fact]:
     size = kv.get("Firmware Size", "").strip()
     if base: add("runner.load_address", base, "Firmware Base", "inferred",
                  "address of the stock M-mode stage the runner replaces")
-    regions = re.findall(r"^Domain0 Region\d+\s*:\s*(0x[0-9a-f]+)-(0x[0-9a-f]+)\s+M:\s*\(([^)]*)\)\s+S/U:\s*\(([^)]*)\)", text, re.M)
+    harts = re.search(r"^[ \t]*Domain0 HARTs\s*:\s*(.+)$", text, re.M)
+    if harts:
+        ids = sorted({int(h) for h in re.findall(r"\d+", harts.group(1))})
+        if ids:
+            add("runner.stock_firmware_harts", ids, "Domain0 HARTs", "inferred",
+                "harts the stock M-mode firmware in this slot runs on; the runner replacing it "
+                "should be entered by the same harts (confirm by smoke test)")
+    regions = re.findall(r"^[ \t]*Domain0 Region\d+\s*:\s*(0x[0-9a-f]+)-(0x[0-9a-f]+)\s+M:\s*\(([^)]*)\)\s+S/U:\s*\(([^)]*)\)", text, re.M)
     if regions:
         rows = [{"start": a, "end": e, "m": m, "su": su} for a, e, m, su in regions]
         add("memory.firmware_window", [r for r in rows if r["su"] == "" and "I" not in r["m"] and r["m"]],

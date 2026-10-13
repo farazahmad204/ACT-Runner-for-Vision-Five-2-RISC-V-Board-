@@ -210,6 +210,7 @@ requirements:
     resolve:
       - user
       - manifest: cpu.boot_hart_selection
+      - extract: runner.stock_firmware_harts
       - extract: runner.observed_boot_hart
       - web: [vendor OpenSBI/firmware entry (fw_base.S, hart lottery, HSM)]
       - probe: runner_banner

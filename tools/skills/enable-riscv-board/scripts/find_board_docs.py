@@ -318,6 +318,166 @@ def clone_repo(index: int, doc: dict[str, Any], out: Path, keywords: list[str]) 
             "bytes": path.stat().st_size, "commit": commit, "files": len(parts)}
 
 
+# ---------- device-tree fallback ----------
+
+DT_REPO_HINT = re.compile(r"files|dts|device.?tree|linux|kernel|bsp|sdk", re.I)
+UPSTREAM_LINUX = "https://github.com/torvalds/linux.git"
+
+
+def has_device_tree(records: list[dict[str, Any]]) -> bool:
+    return any(str(name).lower().endswith((".dtb", ".dts"))
+               for r in records if r.get("status") == "saved"
+               for name in [r.get("file"), *(r.get("extra_files") or [])])
+
+
+def github_owners(found: dict[str, Any]) -> list[str]:
+    urls = [str(d.get("url", "")) for d in found.get("documents", [])] + list(found.get("vendor_sites") or [])
+    owners = []
+    for url in urls:
+        m = re.match(r"^https://github\.com/([A-Za-z0-9_.-]+)(?:/|$)", url)
+        if m and m.group(1).lower() not in {"torvalds", "riscv", "orgs", "topics"} and m.group(1) not in owners:
+            owners.append(m.group(1))
+    return owners[:4]
+
+
+NOT_DT_REPO = re.compile(r"manual|trm|reference|doc|gpu|npu|patch|mcu|driver|firmware-?test", re.I)
+
+
+def model_words(board: str, soc: str) -> list[str]:
+    """Searchable words that name this board (its model, not its vendor) and its SoC family."""
+    board_words = re.findall(r"[a-z][a-z0-9]{2,}", board.lower())[1:]  # "Milk-V Megrez" -> megrez
+    soc_words = re.findall(r"[a-z][a-z0-9]{2,}", soc.lower())
+    family = [m.group(1) for w in soc_words if (m := re.match(r"^([a-z]+\d{3,})[a-z]{0,2}$", w))]
+    plain = [w for w in board_words if not re.fullmatch(r"v|pi", w)]
+    return list(dict.fromkeys([*plain, *family, *soc_words[:1]]))[:3]
+
+
+def guessed_owners(board: str, get: Callable[[str], tuple[bytes, str]]) -> list[str]:
+    """The board vendor's GitHub accounts, guessed from the board name and kept only if they
+    exist: "Milk-V Megrez" -> milkv, milk-v, milkv-megrez."""
+    tokens = board.split()
+    if not tokens:
+        return []
+    vendor = tokens[0].lower()
+    flat = re.sub(r"[^a-z0-9]", "", vendor)
+    model = re.sub(r"[^a-z0-9]", "", tokens[1].lower()) if len(tokens) > 1 else ""
+    names = list(dict.fromkeys(n for n in (f"{flat}-{model}" if model else "", flat, vendor) if n))
+    owners = []
+    for name in names:
+        try:
+            get(f"https://api.github.com/users/{urllib.parse.quote(name)}")
+            owners.append(name)
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+    return owners
+
+
+def candidate_repos(owners: list[str], words: list[str], get: Callable[[str], tuple[bytes, str]]) -> list[str]:
+    """Repositories of the board and SoC vendors that may hold the board's device tree. Only
+    vendor accounts (guessed or found by the search), never arbitrary repositories."""
+    ranked = []
+    for owner in owners:
+        try:
+            body, _kind = get(f"https://api.github.com/users/{urllib.parse.quote(owner)}/repos?per_page=100")
+            repos = json.loads(body)
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+        for repo in repos if isinstance(repos, list) else []:
+            name = str(repo.get("name", ""))
+            named = any(w in name.lower() for w in words)
+            if NOT_DT_REPO.search(name) or not (named or DT_REPO_HINT.search(name)):
+                continue
+            ranked.append(((not re.search(r"files|dts|device", name, re.I), not named,
+                            not re.search(r"linux|kernel|bsp|sdk", name, re.I), name), repo["clone_url"]))
+    return [clone for _rank, clone in sorted(ranked)][:5]
+
+
+def _git(env: dict[str, str], *args: str, timeout: int = 600) -> str:
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True, timeout=timeout, env=env).stdout
+
+
+def compile_dts(root: Path, dts: str, out: Path) -> bool:
+    """A Linux-tree .dts (with #include and dtsi) -> .dtb, using cpp and dtc like the kernel build."""
+    if not shutil.which("cpp") or not shutil.which("dtc"):
+        return False
+    includes = [root / Path(dts).parent, root / "include", root / "scripts/dtc/include-prefixes"]
+    flags = [f"-I{p}" for p in includes if p.is_dir()]
+    pre = subprocess.run(["cpp", "-nostdinc", "-undef", "-D__DTS__", "-x", "assembler-with-cpp", "-P", *flags,
+                          str(root / dts)], capture_output=True, text=True, timeout=120)
+    if pre.returncode != 0:
+        return False
+    built = subprocess.run(["dtc", "-q", "-I", "dts", "-O", "dtb", "-o", str(out), "-"], input=pre.stdout,
+                           capture_output=True, text=True, timeout=120)
+    return built.returncode == 0 and out.is_file()
+
+
+def device_tree_from_repo(clone: str, keywords: list[str], index: int, out: Path) -> dict[str, Any] | None:
+    """The board's device tree from one repository: a .dtb as is, else a .dts compiled."""
+    with tempfile.TemporaryDirectory(prefix="board-dt-") as temporary:
+        target = Path(temporary) / "repo"
+        env = {"GIT_TERMINAL_PROMPT": "0", "PATH": "/usr/bin:/bin", "HOME": temporary}
+        _git(env, "clone", "--depth", "1", "--filter=blob:none", "--no-checkout", "--quiet", clone, str(target))
+        commit = _git(env, "-C", str(target), "rev-parse", "HEAD").strip()
+        tree = _git(env, "-C", str(target), "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+
+        def score(path: str) -> int:
+            name = Path(path).name.lower()
+            return sum(k in name for k in keywords)
+
+        def named(path: str) -> bool:
+            # Two keywords (eic7700 + megrez), or the SoC family: one generic word ("milk") is
+            # also another board of the same vendor.
+            name = Path(path).name.lower()
+            return score(path) >= 2 or any(re.search(r"\d{3,}", k) and k in name for k in keywords)
+
+        rank = lambda p: (-score(p), "npu" in p.lower(), len(p))  # noqa: E731
+        dtbs = sorted((p for p in tree if p.endswith(".dtb") and named(p)), key=rank)
+        sources = sorted((p for p in tree if p.endswith(".dts") and "riscv" in p and named(p)), key=rank)
+        if dtbs:
+            _git(env, "-C", str(target), "checkout", "HEAD", "--", dtbs[0])
+            dest = out / f"{index:02d}_{slug(Path(dtbs[0]).stem)}.dtb"
+            shutil.copyfile(target / dtbs[0], dest)
+            chosen = dtbs[0]
+        elif sources:
+            chosen = sources[0]
+            folder = str(Path(chosen).parent)
+            needed = [p for p in tree if p.startswith(folder + "/") and p.endswith((".dtsi", ".h"))] + [chosen]
+            needed += [p for p in tree if p.startswith("include/dt-bindings/")]
+            # One checkout fetches every blob in one request; the sparse paths keep it small.
+            _git(env, "-C", str(target), "checkout", "HEAD", "--", *needed, timeout=900)
+            dest = out / f"{index:02d}_{slug(Path(chosen).stem)}.dtb"
+            if not compile_dts(target, chosen, dest):
+                return None
+        else:
+            return None
+    web = re.sub(r"\.git$", "", clone)
+    return {"title": f"Device tree {Path(chosen).name}", "url": f"{web}/blob/{commit}/{chosen}",
+            "kind": "device_tree", "publisher": web.split("/")[3], "official": True, "revision": commit,
+            "covers": ["harts", "uart", "timer", "interrupt", "memory"],
+            "why": "found by the device-tree fallback (the search returned none)", "status": "saved",
+            "file": dest.name, "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
+            "bytes": dest.stat().st_size, "commit": commit}
+
+
+def find_device_tree(found: dict[str, Any], out: Path, keywords: list[str], index: int, words: list[str],
+                     board: str = "", get: Callable[[str], tuple[bytes, str]] = None) -> dict[str, Any] | None:
+    """When the search returned no device tree: GitHub repositories named after the board and the
+    vendors' repositories, then upstream Linux. Deterministic, so the DTB does not depend on what
+    the search happened to list."""
+    get = get or fetch
+    owners = list(dict.fromkeys([*guessed_owners(board, get), *github_owners(found)]))
+    for clone in [*candidate_repos(owners, words, get), UPSTREAM_LINUX]:
+        print(f"  device-tree fallback: {clone}", flush=True)
+        try:
+            record = device_tree_from_repo(clone, keywords, index, out)
+        except (subprocess.SubprocessError, OSError) as exc:
+            print(f"    {str(exc)[:200]}", flush=True)
+            continue
+        if record:
+            return record
+    return None
+
+
 def keywords_for(board: str, soc: str, board_id: str) -> list[str]:
     words = set(re.findall(r"[a-z0-9]{3,}", f"{board} {soc} {board_id}".lower()))
     # A part number's family: eic7700x -> eic7700 (files are often named after the family).
@@ -351,6 +511,11 @@ def collect(found: dict[str, Any], out: Path, args: argparse.Namespace,
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             record.update(status="failed", note=str(exc)[:300])
         records.append(record)
+    if getattr(args, "dt_fallback", True) and not has_device_tree(records):
+        record = find_device_tree(found, out, keywords, len(found.get("documents", [])) + 1,
+                                  model_words(args.board, args.soc), args.board)
+        if record:
+            records.append(record)
     return records
 
 
@@ -365,6 +530,8 @@ def main() -> int:
     ap.add_argument("--model", default="")
     ap.add_argument("--max-docs", type=int, default=25)
     ap.add_argument("--clone-repos", action="store_true", help="shallow-clone repository links")
+    ap.add_argument("--no-dt-fallback", dest="dt_fallback", action="store_false",
+                    help="do not look for the device tree in the vendors' repositories and upstream Linux")
     ap.add_argument("--from-json", type=Path, help="reuse a saved search answer (no Codex call)")
     ap.add_argument("--extract", action="store_true",
                     help="then run fill_gaps.py --backend codex on the saved documents")

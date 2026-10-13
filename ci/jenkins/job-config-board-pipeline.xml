@@ -3,7 +3,18 @@
   <actions/>
   <description>Offline board enablement from a portal board request (admin New board page): Codex web search for official documents, evidence extraction, verified document answers (optional model calls), rule decisions, generated runner board files and ACT config, runner build and validation. Publishes REPORT.md and result.json. Never flashes, power-cycles, pushes or changes other jobs.</description>
   <keepDependencies>false</keepDependencies>
-  <properties/>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition><name>REQUEST_ID</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
+        <hudson.model.TextParameterDefinition><name>BOARD_REQUEST_YAML</name><defaultValue></defaultValue><trim>false</trim></hudson.model.TextParameterDefinition>
+        <hudson.model.StringParameterDefinition><name>PORTAL_USER</name><defaultValue></defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition><name>RUNNER_BRANCH</name><defaultValue>vf2-uart-stream-jenkins</defaultValue><trim>true</trim></hudson.model.StringParameterDefinition>
+        <hudson.model.BooleanParameterDefinition><name>ALLOW_MODEL_CALLS</name><defaultValue>true</defaultValue></hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition><name>PUBLISH_RESULT</name><defaultValue>true</defaultValue></hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
     <script>__JENKINSFILE__</script>
     <sandbox>true</sandbox>

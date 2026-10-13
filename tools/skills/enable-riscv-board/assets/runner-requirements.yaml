@@ -1,0 +1,998 @@
+# Everything the common UART runner needs to be built and run on a board.
+#
+# Generated from the runner code: every BOARD_* variable build_runner.sh passes
+# to the compiler or linker, the preset keys it and the adapters read, plus the
+# boot/bench facts needed to install and talk to the runner.
+# test_runner_requirements.py fails if build_runner.sh gains a BOARD_* input
+# that is missing here.
+#
+# Fields
+#   id          stable requirement ID (manifest / research / facts vocabulary)
+#   kind        fact    = found from evidence (never invented)
+#               choice  = decided by the agent from facts, using `rules`
+#               config  = project convention (value given by `default`)
+#               bench   = lab setup, answered by the user or measured
+#   consumer    where the value goes (preset key, linker, adapter, docs)
+#   needed_for  offline_build | hardware_smoke | install | act | ci
+#   resolve     ordered sources to try:
+#                 user              answers/files the user supplied
+#                 extract: <id>     collect_board_facts.py fact ID
+#                 manifest: <path>  existing board manifest field
+#                 document: [...]   what to look for in user-supplied docs
+#                 web: [...]        official sources to search if still open
+#                 probe: <name>     hardware probe that measures it
+#   default     value allowed when nothing else resolves it (null = none)
+#   rules       constraints a choice or value must satisfy
+#   verify      how the value is proven on hardware
+
+schema_version: 1
+
+groups:
+  boot: Boot chain, payload slot and image packaging (vendor-owned flow)
+  harts: Which harts enter the runner and their roles
+  uart: Console UART used for READY/ELF/DONE
+  timer: CLINT timer/IPI used for timeouts and the monitor hart
+  interrupt: PLIC routing (cleanup path and ACT interrupt tests)
+  memory: Runner, payload, staging and reserved address ranges
+  platform: Watchdog and SoC-specific start-up quirks
+  bench: Host connection, power and tooling
+  identity: ISA and spec versions (ACT phase)
+  act: CSR and platform facts the ACT config needs (UDB params, sail.json, rvmodel macros)
+
+requirements:
+  # ------------------------------------------------------------------ boot
+  - id: boot.medium
+    group: boot
+    kind: fact
+    consumer: board adapter, docs
+    needed_for: [install]
+    description: Boot medium used for the runner image (SD, SPI, eMMC, recovery USB, JTAG).
+    search: [boot mode, boot medium, boot select, strap, SPI flash, SD, eMMC, USB]
+    resolve:
+      - user
+      - manifest: boot.medium
+      - document: [board boot guide, boot switch / strap table]
+      - web: [vendor board docs "boot" page, vendor getting-started guide]
+    default: null
+    verify: stock image boots from this medium
+
+  - id: boot.chain
+    group: boot
+    kind: fact
+    consumer: docs, adapter
+    needed_for: [offline_build, install]
+    description: Vendor stages before the runner and which stage initializes DRAM.
+    search: [boot flow, boot sequence, boot ROM, bootloader, DDR initialization, stage]
+    resolve:
+      - user
+      - manifest: boot.normal_chain
+      - document: [SoC TRM boot chapter, vendor boot flow diagram]
+      - web: [vendor bootloader/BSP repository (bootchain config, FIT/its, partition table)]
+    default: null
+    verify: stock boot log shows the same stages
+
+  - id: boot.payload_slot
+    group: boot
+    kind: fact
+    consumer: board adapter
+    needed_for: [offline_build]
+    description: Final M-mode component the runner replaces (OpenSBI, fw_payload, FIT node, partition).
+    resolve:
+      - user
+      - manifest: boot.runner_chain
+      - document: [boot chain description]
+      - web: [vendor image recipe / bootchain config / FIT source]
+    default: null
+    rules:
+      - "must be entered in M-mode; an S-mode slot (U-Boot proper) is not enough"
+    verify: runner prints its banner after the vendor DDR stage
+
+  - id: boot.entry_privilege
+    group: boot
+    kind: fact
+    consumer: docs
+    needed_for: [offline_build]
+    description: Privilege mode at the payload slot entry; must be M.
+    resolve:
+      - manifest: cpu.boot_privilege
+      - document: [boot chain description]
+      - web: [vendor OpenSBI/bootloader source for that slot]
+    default: null
+    verify: runner reads mhartid/mstatus without trapping
+
+  - id: boot.image_format
+    group: boot
+    kind: fact
+    consumer: BOARD_PACKAGE_MODE, BOARD_FIT_SOURCE, BOARD_BOOT_IMAGE, BOARD_BOOT_IMAGE_PAD_BYTES
+    needed_for: [offline_build]
+    description: Container/signing format of the slot (FIT, raw, vendor-signed chain).
+    search: [boot image, image header, signature, sign, format]
+    resolve:
+      - user
+      - manifest: boot.image_format
+      - document: [image/packaging guide]
+      - web: [vendor packaging tool and its config in the BSP repository]
+    default: null
+    verify: packaged image boots
+
+  - id: boot.packaging_command
+    group: boot
+    kind: fact
+    consumer: board adapter (board_package_image)
+    needed_for: [offline_build]
+    description: Reproducible command and inputs that build the boot image with the runner substituted.
+    resolve:
+      - manifest: boot.packaging_command
+      - document: [vendor build/packaging instructions]
+      - web: [vendor CI workflow or Makefile that builds the bootloader image]
+    default: null
+    verify: build_runner.sh produces boot_image.bin
+
+  - id: boot.install_procedure
+    group: boot
+    kind: fact
+    consumer: board adapter (board_flash_image), docs
+    needed_for: [install]
+    description: How to load the image non-destructively (RAM/recovery) and how to install it persistently.
+    resolve:
+      - user
+      - manifest: boot.install_command
+      - document: [flashing/update guide]
+      - web: [vendor "update bootloader" / recovery guide]
+    default: null
+    verify: rehearsal loads the image to RAM and CRC-checks it before any write
+
+  - id: boot.restore_procedure
+    group: boot
+    kind: fact
+    consumer: docs
+    needed_for: [install]
+    description: Recovery path and the exact stock image to restore.
+    resolve:
+      - user
+      - manifest: boot.recovery_procedure
+      - document: [recovery guide]
+      - web: [vendor recovery guide and bootloader release assets]
+    default: null
+    verify: restore image matches the U-Boot/OpenSBI build in the stock boot log
+
+  - id: boot.load_address
+    group: boot
+    kind: fact
+    consumer: BOARD_FW_LOAD_ADDR (linker), board link.ld
+    needed_for: [offline_build]
+    description: Address the slot is loaded and entered at.
+    search: [load address, entry address, jump address, boot, DDR]
+    resolve:
+      - manifest: memory.firmware_load_address
+      - extract: runner.load_address
+      - document: [boot chain config, memory map]
+      - web: [bootchain/FIT config in vendor source]
+    default: null
+    verify: runner banner appears; map entry equals this address
+
+  - id: boot.firmware_window
+    group: memory
+    kind: fact
+    consumer: board link.ld (size assert)
+    needed_for: [offline_build]
+    description: Region reserved for the M-mode stage the runner replaces (upper bound for runner size).
+    search: [reserved, firmware, OpenSBI, M-mode, memory region]
+    resolve:
+      - extract: memory.firmware_window
+      - manifest: memory.runner_limit
+      - document: [memory map, reserved-memory]
+    default: null
+    rules:
+      - "runner text+data+bss+stack must fit"
+    verify: linker ASSERT passes
+
+  # ----------------------------------------------------------------- harts
+  - id: harts.ids
+    group: harts
+    kind: fact
+    consumer: docs
+    needed_for: [offline_build]
+    description: Hart IDs present on the SoC.
+    search: [hart, hart ID, mhartid, core, CPU cluster]
+    resolve:
+      - extract: cpu.hart_ids
+      - document: [TRM CPU chapter]
+    default: null
+    verify: runner prints hartid
+
+  - id: harts.entering
+    group: harts
+    kind: fact
+    consumer: start.S role selection
+    needed_for: [hardware_smoke]
+    description: Which harts enter the payload entry (all, boot hart only, lottery).
+    resolve:
+      - user
+      - manifest: cpu.boot_hart_selection
+      - extract: runner.observed_boot_hart
+      - web: [vendor OpenSBI/firmware entry (fw_base.S, hart lottery, HSM)]
+      - probe: runner_banner
+    default: null
+    verify: both runner and monitor hart lines appear in the banner
+
+  - id: harts.runner
+    group: harts
+    kind: choice
+    consumer: BOARD_RUNNER_HART_ID
+    needed_for: [offline_build]
+    description: Hart that runs the ELF.
+    resolve:
+      - user
+      - manifest: cpu.runner_hart_id
+    default: null
+    rules:
+      - "must be in harts.entering"
+      - "prefer the stock boot hart"
+    verify: READY printed from this hart
+
+  - id: harts.monitor
+    group: harts
+    kind: choice
+    consumer: BOARD_MONITOR_HART_ID
+    needed_for: [offline_build]
+    description: Second hart that watches tohost and timeouts.
+    resolve:
+      - user
+      - manifest: cpu.monitor_hart_id
+    default: null
+    rules:
+      - "must be in harts.entering"
+      - "must differ from harts.runner"
+    verify: monitor prints "[MON] hartN online"
+
+  - id: harts.secondary_wakeup
+    group: platform
+    kind: fact
+    consumer: BOARD_K1_HART_WAKEUP_ENABLE
+    needed_for: [hardware_smoke]
+    description: Whether the monitor hart must be woken by SoC-specific code (BPI-F3/K1 does).
+    search: [hart, core reset, release, wakeup, power on, secondary core]
+    resolve:
+      - user
+      - document: [TRM reset/power chapter]
+      - web: [vendor OpenSBI platform code (hart start/HSM)]
+      - probe: runner_banner
+    default: 0
+    verify: monitor hart comes online
+
+  # ------------------------------------------------------------------ uart
+  - id: uart.base
+    group: uart
+    kind: fact
+    consumer: BOARD_UART_BASE
+    needed_for: [offline_build]
+    description: Console UART MMIO base.
+    quote_terms: [uart]
+    search: [UART, UART0, serial, memory map, base address]
+    resolve:
+      - extract: uart.base
+      - manifest: uart.base
+      - document: [TRM memory map, schematic debug-UART net]
+      - web: [vendor DTS console node]
+    default: null
+    verify: banner prints
+
+  - id: uart.size
+    group: uart
+    kind: fact
+    consumer: BOARD_UART_SIZE
+    needed_for: [offline_build]
+    description: UART register window size.
+    search: [UART, UART0, memory map, address range, size]
+    resolve:
+      - manifest: uart.size
+      - document: [TRM memory map]
+      - web: [vendor DTS reg size]
+    default: 0x1000
+    verify: none needed beyond banner
+
+  - id: uart.register_width
+    group: uart
+    kind: fact
+    consumer: BOARD_UART_REG_IO_WIDTH
+    needed_for: [offline_build]
+    description: MMIO access width (1, 2 or 4 bytes).
+    search: [UART, register width, 32-bit, access width, register]
+    resolve:
+      - extract: uart.register_width
+      - manifest: uart.register_width
+      - document: [TRM UART chapter]
+      - web: [vendor DTS reg-io-width (Linux and U-Boot may differ)]
+    default: null
+    verify: TX and RX both work
+
+  - id: uart.register_spacing
+    group: uart
+    kind: fact
+    consumer: runner_shared.h offsets (shift 2 assumed)
+    needed_for: [offline_build]
+    description: Register shift; the runner assumes shift 2 (4-byte stride).
+    resolve:
+      - extract: uart.register_spacing
+      - manifest: uart.register_shift
+      - web: [vendor DTS reg-shift]
+    default: null
+    rules:
+      - "must be 2 for the current runner; otherwise a runner change is needed"
+    verify: banner prints
+
+  - id: uart.input_clock_hz
+    group: uart
+    kind: fact
+    consumer: BOARD_UART_INPUT_CLOCK_HZ
+    needed_for: [offline_build]
+    description: UART input clock (needed only if the runner initializes the 8250).
+    quote_terms: [uart]
+    search: [UART, uart_sclk, UART reference clock, MHz, clock frequency]
+    resolve:
+      - extract: uart.clock
+      - manifest: uart.input_clock_hz
+      - document: [TRM clock chapter]
+      - web: [vendor DTS clock-frequency]
+    default: null
+    verify: correct baud on the host
+
+  - id: uart.baud
+    group: uart
+    kind: config
+    consumer: BOARD_UART_BAUD
+    needed_for: [offline_build]
+    description: Console baud rate.
+    resolve:
+      - user
+      - manifest: uart.baud
+    default: 115200
+    verify: readable banner
+
+  - id: uart.init_by_runner
+    group: uart
+    kind: fact
+    consumer: BOARD_UART_8250_INIT_ENABLE
+    needed_for: [hardware_smoke]
+    description: Whether the runner must program the 8250 (the replaced stage used to).
+    resolve:
+      - extract: uart.initialization_owner
+      - manifest: uart.initialization_owner
+      - web: [vendor OpenSBI platform/console init]
+      - probe: rx_diag
+    default: null
+    verify: header bytes received (rx diagnostic shows bytes > 0)
+
+  - id: uart.plic_source
+    group: interrupt
+    kind: fact
+    consumer: BOARD_UART_PLIC_SOURCE, ACT rvmodel_macros.h
+    needed_for: [act]
+    description: PLIC source number of the console UART.
+    quote_terms: [uart]
+    search: [UART, UART0, interrupt, interrupt ID, interrupt number, PLIC, source]
+    resolve:
+      - extract: interrupt.uart_source
+      - document: [TRM interrupt map]
+      - web: [vendor DTS console node interrupts]
+    default: null
+    verify: ACT interrupt test traps with mcause=11
+
+  # ----------------------------------------------------------------- timer
+  - id: timer.mswi_base
+    group: timer
+    kind: fact
+    consumer: BOARD_CLINT_MSIP_BASE
+    needed_for: [offline_build]
+    description: CLINT/ACLINT MSWI (msip) base.
+    search: [CLINT, msip, software interrupt, base address]
+    resolve:
+      - extract: timer.mswi_base
+      - manifest: timer.mswi_base
+      - document: [TRM memory map]
+      - web: [vendor OpenSBI platform/DTS clint node]
+    default: null
+    verify: monitor hart wakes; IPI tests pass
+
+  - id: timer.mtimecmp_base
+    group: timer
+    kind: fact
+    consumer: BOARD_CLINT_MTIMECMP_BASE
+    needed_for: [offline_build]
+    description: mtimecmp array base.
+    search: [CLINT, mtimecmp, timer compare, offset]
+    resolve:
+      - extract: timer.mtimecmp_base
+      - manifest: timer.mtimecmp_base
+      - document: [TRM CLINT chapter]
+    default: null
+    verify: timer interrupt tests pass
+
+  - id: timer.mtime_address
+    group: timer
+    kind: fact
+    consumer: BOARD_CLINT_MTIME_ADDR
+    needed_for: [offline_build]
+    description: mtime register address (RX and test timeouts).
+    search: [CLINT, mtime, timer register, offset]
+    resolve:
+      - extract: timer.mtime_address
+      - manifest: timer.mtime_address
+      - document: [TRM CLINT chapter]
+    default: null
+    verify: rx diagnostic heartbeats show mtime advancing
+
+  - id: timer.mtime_hz
+    group: timer
+    kind: fact
+    consumer: docs (timeouts are in ticks), ACT RVMODEL_MAX_CYCLES_PER_TIMER_TICK
+    needed_for: [hardware_smoke, act]
+    description: mtime frequency.
+    quote_terms: [hz, mtime, rtc, timebase]
+    search: [mtime | timebase | RTC, real time counter, frequency, MHz]
+    resolve:
+      - extract: timer.mtime_hz
+      - document: [TRM timer chapter]
+      - probe: rx_diag
+    default: null
+    verify: heartbeat mtime delta vs host time
+
+  # ------------------------------------------------------------- interrupt
+  - id: interrupt.plic_base
+    group: interrupt
+    kind: fact
+    consumer: BOARD_PLIC_BASE
+    needed_for: [act]
+    description: PLIC base address.
+    search: [PLIC, platform-level interrupt controller, base address, memory map]
+    resolve:
+      - extract: interrupt.plic_base
+      - document: [TRM memory map]
+      - web: [vendor DTS plic node]
+    default: null
+    verify: ACT external interrupt test
+
+  - id: interrupt.runner_m_context
+    group: interrupt
+    kind: fact
+    consumer: BOARD_RUNNER_M_PLIC_CONTEXT, ACT macros
+    needed_for: [act]
+    description: PLIC context of the runner hart in M-mode.
+    search: [PLIC, context, hart, M-mode, machine mode, target]
+    resolve:
+      - extract: interrupt.runner_contexts
+      - document: [TRM PLIC context map]
+      - web: [vendor DTS plic interrupts-extended]
+    default: null
+    verify: ACT external interrupt test
+
+  - id: interrupt.runner_s_context
+    group: interrupt
+    kind: fact
+    consumer: BOARD_RUNNER_S_PLIC_CONTEXT, ACT macros
+    needed_for: [act]
+    description: PLIC context of the runner hart in S-mode.
+    search: [PLIC, context, hart, S-mode, supervisor mode, target]
+    resolve:
+      - extract: interrupt.runner_contexts
+      - document: [TRM PLIC context map]
+      - web: [vendor DTS plic interrupts-extended]
+    default: null
+    verify: ACT supervisor external interrupt test
+
+  - id: interrupt.cleanup_enable
+    group: interrupt
+    kind: choice
+    consumer: BOARD_EXTERNAL_IRQ_CLEANUP_ENABLE
+    needed_for: [offline_build]
+    description: Let the runner clear PLIC enables between tests.
+    resolve:
+      - user
+    default: 0
+    rules:
+      - "enable only when plic_base, uart_plic_source and both contexts are confirmed"
+    verify: interrupt tests do not see stale external interrupts
+
+  # ---------------------------------------------------------------- memory
+  - id: memory.dram_window
+    group: memory
+    kind: fact
+    consumer: docs (bounds for every choice below)
+    needed_for: [offline_build]
+    description: Documented DRAM range(s).
+    search: [DDR | DRAM | memory port, memory map, address range, system memory]
+    resolve:
+      - extract: memory.documented_window
+      - manifest: memory.dram_base
+      - document: [TRM memory map]
+      - web: [vendor DTS memory node]
+    default: null
+    verify: payload and staging accesses succeed
+
+  - id: memory.reserved_regions
+    group: memory
+    kind: fact
+    consumer: choices below
+    needed_for: [offline_build]
+    description: Reserved, secure, firmware and device ranges inside or near DRAM.
+    search: [reserved | secure | firmware, memory map, DDR, region]
+    resolve:
+      - extract: memory.reserved_regions
+      - manifest: memory.reserved_regions
+      - document: [TRM memory map, secure/PMP configuration]
+      - web: [vendor DTS reserved-memory]
+    default: null
+    verify: no access faults in the chosen windows
+
+  - id: memory.ram_window
+    group: memory
+    kind: choice
+    consumer: BOARD_RAM_BASE, BOARD_RAM_LIMIT
+    needed_for: [offline_build]
+    description: Conservative DRAM window the runner may touch.
+    resolve:
+      - manifest: memory.dram_base
+    default: null
+    rules:
+      - "inside memory.dram_window"
+      - "contains runner, payload and staging"
+    verify: smoke test
+
+  - id: memory.payload_window
+    group: memory
+    kind: choice
+    consumer: BOARD_PAYLOAD_BASE, BOARD_PAYLOAD_LIMIT, ACT link.ld
+    needed_for: [offline_build]
+    description: Where ELF segments, entry and tohost must lie.
+    resolve:
+      - manifest: memory.payload_base
+    default: null
+    rules:
+      - "inside ram_window"
+      - "no overlap with firmware window, reserved regions or staging"
+      - "at least 64 MiB"
+    verify: ELF loads; runner rejects ELFs outside
+
+  - id: memory.excluded_range
+    group: memory
+    kind: choice
+    consumer: BOARD_DDR_EXCLUDE_BASE, BOARD_DDR_EXCLUDE_LIMIT
+    needed_for: [offline_build]
+    description: Reserved hole inside ram_window the loader must reject.
+    resolve:
+      - manifest: memory.reserved_regions
+    default: null
+    rules:
+      - "a reserved region intersecting ram_window between payload and staging, or none"
+    verify: compile-time asserts pass
+
+  - id: memory.staging_buffer
+    group: memory
+    kind: choice
+    consumer: BOARD_UART_ELF_BUFFER_ADDR, BOARD_UART_ELF_MAX_BYTES
+    needed_for: [offline_build]
+    description: UART receive buffer for the whole ELF.
+    resolve:
+      - manifest: memory.staging_address
+    default: null
+    rules:
+      - "inside ram_window"
+      - "no overlap with payload or reserved regions"
+      - "at least the largest ELF (128 MiB typical)"
+    verify: RX_OK for the largest test ELF
+
+  - id: memory.fixed_tohost
+    group: memory
+    kind: choice
+    consumer: BOARD_FIXED_TOHOST_ADDR
+    needed_for: [offline_build]
+    description: Fallback tohost address for ELFs without a tohost symbol.
+    resolve:
+      - user
+    default: null
+    rules:
+      - "inside payload_window"
+      - "8-byte aligned"
+    verify: tohost-less smoke ELF completes
+
+  - id: memory.stacks
+    group: memory
+    kind: config
+    consumer: BOARD_FW_STACK_BYTES, BOARD_TEST_STACK_BYTES, BOARD_TRAP_STACK_BYTES
+    needed_for: [offline_build]
+    description: Runner stack sizes.
+    resolve:
+      - manifest: memory.stack_bytes
+    default: "fw 0x4000, test 262144, trap 1024"
+    verify: linker map within firmware window
+
+  # -------------------------------------------------------------- platform
+  - id: platform.watchdog
+    group: platform
+    kind: fact
+    consumer: BOARD_WDT_ENABLE, BOARD_WDT_BASE, BOARD_WDT_LOAD, BOARD_WDT_CTRL, BOARD_WDT_LOCK, BOARD_WDT_UNLOCK_KEY
+    needed_for: [hardware_smoke]
+    description: Whether a watchdog is running at handoff and how to service/disable it.
+    search: [watchdog, WDT, timeout, reset, enable]
+    resolve:
+      - user
+      - document: [TRM watchdog chapter]
+      - web: [vendor bootloader watchdog setup]
+      - probe: runner_banner
+    default: "disabled (BOARD_WDT_ENABLE=0) unless the board resets during a long test"
+    verify: a 50 s test completes without reset
+
+  - id: platform.id
+    group: platform
+    kind: config
+    consumer: BOARD_PLATFORM_ID, BOARD_NAME, BOARD_DESCRIPTION, BOARD_ADAPTER, BOARD_LINKER_SCRIPT, BOARD_PAYLOAD_TRANSPORT
+    needed_for: [offline_build]
+    description: Board identity in the runner (next free platform ID; transport uart_stream).
+    resolve:
+      - user
+    default: "next unused BOARD_PLATFORM_ID; adapter = board id; transport uart_stream"
+    verify: READY board= field
+
+  - id: platform.rx_diagnostic
+    group: platform
+    kind: config
+    consumer: BOARD_UART_RX_DIAG
+    needed_for: [hardware_smoke]
+    description: Compile in the UART RX diagnostic (loopback, RX counters, heartbeats); off for production.
+    resolve:
+      - user
+    default: 0
+    verify: "[DIAG] lines appear only when enabled"
+
+  # ----------------------------------------------------------------- bench
+  - id: bench.console_path
+    group: bench
+    kind: bench
+    consumer: DEFAULT_SERIAL_DEV, docs
+    needed_for: [hardware_smoke]
+    description: Which host USB-UART reaches the console UART, both directions.
+    resolve:
+      - user
+      - document: ["schematic: onboard USB-UART bridge on the console UART"]
+      - web: [vendor schematic PDF]
+      - probe: adapter_loopback
+    default: null
+    rules:
+      - "if an onboard bridge drives console RX, never use an external adapter while it is powered"
+    verify: stock login answers Enter; runner HEADER_OK
+
+  - id: bench.power_control
+    group: bench
+    kind: bench
+    consumer: run_elf_batch.py (devices.json), Jenkins
+    needed_for: [ci]
+    description: Remote power/reset backend for one-ELF-per-boot runs.
+    resolve:
+      - user
+    default: "manual power cycle (not CI-capable)"
+    verify: batch runner power-cycles between ELFs
+
+  - id: bench.toolchain
+    group: bench
+    kind: config
+    consumer: TOOLCHAIN_DIR, TOOLCHAIN_TRIPLE
+    needed_for: [offline_build]
+    description: Bare-metal RISC-V GCC.
+    resolve:
+      - user
+    default: "/home/lpt-10xe/riscv64/bin, riscv64-unknown-elf"
+    verify: build_runner.sh succeeds
+
+  - id: bench.packaging_inputs
+    group: bench
+    kind: bench
+    consumer: adapter environment (e.g. MEGREZ_NSIGN_ROOT)
+    needed_for: [offline_build]
+    description: Pinned vendor packaging tree and blobs (outside /tmp).
+    resolve:
+      - user
+      - web: [vendor bootloader repository at a pinned commit]
+    default: null
+    verify: packaging hash recorded in the build manifest
+
+  # -------------------------------------------------------------- identity
+  - id: identity.isa
+    group: identity
+    kind: fact
+    consumer: ACT UDB config, sail.json
+    needed_for: [act]
+    description: ISA string and extensions.
+    search: [ISA, extension, RV64, misa, instruction set]
+    resolve:
+      - user
+      - extract: identity.isa
+      - document: [TRM CPU chapter]
+      - web: [vendor product page / core manual]
+      - probe: csr_probe
+    default: null
+    verify: misa from csr_probe
+
+  - id: identity.priv_version
+    group: identity
+    kind: fact
+    consumer: ACT UDB (Sm/S version), sail.json
+    needed_for: [act]
+    description: Privileged spec version (and H version if present).
+    search: [privileged, specification, version, ratified]
+    resolve:
+      - extract: identity.priv_version
+      - document: [TRM compliance table]
+      - web: [core manual]
+    default: null
+    verify: menvcfg/mconfigptr presence in csr_probe
+
+  # ------------------------------------------------------------------ act
+  - id: act.vm_modes
+    group: act
+    kind: fact
+    consumer: spec virtual_memory (UDB Sv*, sail satp modes)
+    needed_for: [act]
+    description: Virtual-memory modes (Sv39/Sv48/Sv57); the widest implies the narrower ones.
+    search: [satp | MMU | virtual memory, Sv39, Sv48, Sv57, MODE]
+    resolve:
+      - extract: cpu.mmu_type
+      - document: [TRM CPU chapter, satp MODE table]
+      - probe: satp MODE write/read
+    default: null
+    verify: satp MODE probe; Sv tests pass
+
+  - id: act.phys_addr_bits
+    group: act
+    kind: fact
+    consumer: spec csr.phys_addr_bits (UDB PHYS_ADDR_WIDTH, sail physaddr_bits)
+    needed_for: [act]
+    description: Physical address width in bits.
+    quote_terms: [physical, address]
+    search: [physical address | PA, physical address width, bits]
+    resolve:
+      - extract: cpu.phys_addr_bits
+      - document: [TRM CPU chapter]
+      - probe: pmpaddr0 writable bits + 2
+    default: null
+    verify: pmpaddr0 probe
+
+  - id: act.asid_bits
+    group: act
+    kind: fact
+    consumer: spec csr.asid_bits (UDB ASID_WIDTH, sail asidlen)
+    needed_for: [act]
+    description: Implemented satp.ASID width.
+    quote_terms: [asid]
+    search: [ASID | satp, ASID, width, bits]
+    resolve:
+      - extract: cpu.asid_bits
+      - document: [TRM satp table]
+      - probe: satp ASID write/read
+    default: null
+    verify: satp ASID probe
+
+  - id: act.vmid_bits
+    group: act
+    kind: fact
+    consumer: spec csr.vmid_bits (UDB VMID_WIDTH, sail vmidlen)
+    needed_for: [act]
+    description: Implemented hgatp.VMID width (only with H).
+    quote_terms: [vmid]
+    search: [VMID | hgatp, VMID, width, bits]
+    resolve:
+      - document: [TRM hgatp table]
+      - probe: hgatp VMID write/read
+    default: null
+    verify: hgatp VMID probe
+
+  - id: act.pmp_entries
+    group: act
+    kind: fact
+    consumer: spec csr.pmp.entries (UDB NUM_USABLE_PMP_ENTRIES, sail pmp usable_count)
+    needed_for: [act]
+    description: Usable PMP entries.
+    quote_terms: [pmp, region, entr]
+    search: [PMP | physical memory protection, entries, regions, pmpcfg]
+    resolve:
+      - extract: cpu.pmp_regions
+      - document: [TRM PMP section]
+      - probe: pmpaddr write/read
+    default: null
+    verify: PMP tests pass
+
+  - id: act.pmp_granularity
+    group: act
+    kind: fact
+    consumer: spec csr.pmp.granularity_bytes (UDB PMP_GRANULARITY, sail pmp grain)
+    needed_for: [act]
+    description: PMP granularity in bytes.
+    quote_terms: [granul]
+    search: [PMP | granularity, granule, bytes, KiB]
+    resolve:
+      - extract: cpu.pmp_granularity
+      - document: [TRM PMP section]
+      - probe: pmpaddr all-ones read-back
+    default: null
+    verify: PMP tests pass
+
+  - id: act.hpm_counters
+    group: act
+    kind: fact
+    consumer: spec csr.hpm_counters (UDB HPM_COUNTER_EN, sail writable_hpm_counters)
+    needed_for: [act]
+    description: Implemented mhpmcounter indices (3..31).
+    search: [mhpmcounter | performance monitor, hpmcounter, counters, event]
+    resolve:
+      - extract: cpu.hpm_counter_mask
+      - document: [TRM performance counter section]
+      - probe: mhpmcounter write/read
+    default: null
+    verify: Zihpm tests pass
+
+  - id: act.hpm_counter_width
+    group: act
+    kind: fact
+    consumer: spec csr.hpm_counter_width (UDB HPM_COUNTERn_WIDTH)
+    needed_for: [act]
+    description: Width of the implemented mhpmcounters in bits.
+    quote_terms: [width, bit]
+    search: [mhpmcounter | counter width, bits, performance counter]
+    resolve:
+      - document: [TRM performance counter section]
+      - probe: write all-ones, read back
+    default: null
+    verify: Zihpm tests pass
+
+  - id: act.medeleg_writable
+    group: act
+    kind: fact
+    consumer: spec csr.medeleg_writable (sail medeleg delegatable bits)
+    needed_for: [act]
+    description: Writable (delegatable) medeleg bits.
+    quote_terms: [delegat, rw]
+    value_kind: bitmask
+    search: [medeleg | exception delegation, delegatable, writable, bits]
+    resolve:
+      - document: [TRM medeleg table]
+      - probe: write all-ones, read back
+    default: null
+    verify: ExceptionsSm tests pass
+
+  - id: act.mideleg_writable
+    group: act
+    kind: fact
+    consumer: spec csr.mideleg_writable (sail mideleg delegatable bits)
+    needed_for: [act]
+    description: Writable mideleg bits (computed from S/Sscofpmf when absent).
+    quote_terms: [delegat, rw]
+    value_kind: bitmask
+    search: [mideleg | interrupt delegation, delegatable, writable, bits]
+    resolve:
+      - document: [TRM mideleg table]
+      - probe: write all-ones, read back
+    default: null
+    verify: InterruptsSm tests pass
+
+  - id: act.mtvec_vectored_alignment
+    group: act
+    kind: fact
+    consumer: spec csr.mtvec.vectored_alignment (UDB MTVEC_BASE_ALIGNMENT_VECTORED)
+    needed_for: [act]
+    description: mtvec BASE alignment in bytes when MODE=Vectored.
+    quote_terms: [align]
+    search: [mtvec | vectored, alignment, BASE, MODE]
+    resolve:
+      - document: [TRM mtvec table]
+      - probe: write unaligned BASE, read back
+    default: null
+    verify: InterruptsSm tests pass
+
+  - id: act.stvec_vectored_alignment
+    group: act
+    kind: fact
+    consumer: spec csr.stvec.vectored_alignment (UDB STVEC_BASE_ALIGNMENT_VECTORED)
+    needed_for: [act]
+    description: stvec BASE alignment in bytes when MODE=Vectored.
+    quote_terms: [align]
+    search: [stvec | vectored, alignment, BASE, MODE]
+    resolve:
+      - document: [TRM stvec table]
+      - probe: write unaligned BASE, read back
+    default: null
+    verify: InterruptsS tests pass
+
+  - id: act.time_csr
+    group: act
+    kind: fact
+    consumer: spec csr.time_csr_implemented (UDB TIME_CSR_IMPLEMENTED)
+    needed_for: [act]
+    description: "Whether rdtime reads a hardware time CSR (false: it traps to M-mode)."
+    quote_terms: [time]
+    search: [time | rdtime, time CSR, counter, implemented]
+    resolve:
+      - document: [TRM CSR list]
+      - probe: rdtime in M-mode
+    default: null
+    verify: ZicntrSm tests pass
+
+  - id: act.ids
+    group: act
+    kind: fact
+    consumer: spec platform.ids (UDB VENDOR_ID/ARCH_ID/IMP_ID, sail vendorid/archid/impid)
+    needed_for: [act]
+    description: mvendorid, marchid and mimpid.
+    search: [mvendorid | marchid, mimpid, vendor ID, architecture ID]
+    resolve:
+      - document: [TRM CSR reset values]
+      - probe: csrr mvendorid/marchid/mimpid
+    default: null
+    verify: Sm tests pass
+
+  - id: act.cpu_hz_max
+    group: act
+    kind: config
+    consumer: spec platform.cpu_hz_max (RVMODEL_MAX_CYCLES_PER_TIMER_TICK)
+    needed_for: [act]
+    description: Maximum core clock in Hz (an upper bound is enough).
+    quote_terms: [hz]
+    search: [CPU | core clock, frequency, GHz, maximum]
+    resolve:
+      - document: [board overview, TRM clock chapter]
+      - web: [vendor board page]
+    default: 2000000000
+    verify: timer interrupt tests do not race
+
+  - id: act.cache_block_bytes
+    group: act
+    kind: fact
+    consumer: spec platform.cache_block_bytes (sail cache_block_size_exp, UDB CACHE_BLOCK_SIZE)
+    needed_for: [act]
+    description: Cache block size in bytes.
+    quote_terms: [cache]
+    search: [cache | cache line, block size, bytes]
+    resolve:
+      - extract: cpu.cache_block_size
+      - document: [TRM cache chapter]
+    default: null
+    verify: Zicbo tests (if any) pass
+
+  - id: act.plic_sources
+    group: act
+    kind: fact
+    consumer: spec platform.plic.sources (rvmodel_macros.h enable words)
+    needed_for: [act]
+    description: Number of PLIC interrupt sources.
+    quote_terms: [source]
+    search: [PLIC | interrupt sources, number of sources]
+    resolve:
+      - extract: interrupt.plic_sources
+      - document: [TRM PLIC chapter]
+    default: null
+    verify: interrupt tests pass
+
+  - id: act.hypervisor_version
+    group: act
+    kind: fact
+    consumer: spec hypervisor.hardware_version (H test policy)
+    needed_for: [act]
+    description: Implemented Hypervisor extension version (only when the ISA has H).
+    quote_terms: [hypervisor]
+    search: [hypervisor | H extension, version, draft, ratified]
+    resolve:
+      - document: [TRM compliance table]
+      - web: [vendor core datasheet]
+    default: null
+    verify: H tests match the declared version
+
+  - id: act.non_standard
+    group: act
+    kind: fact
+    consumer: spec non_standard_extensions (UDB NON_STANDARD_EXTENSION_IMPLEMENTED)
+    needed_for: [act]
+    description: Whether misa.X (non-standard extensions) is set.
+    resolve:
+      - extract: identity.misa
+      - probe: csrr misa
+    default: null
+    verify: Sm misa test passes

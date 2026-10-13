@@ -1,0 +1,79 @@
+schema_version: 1
+board:
+  id: bpif3_k1
+  vendor: Banana Pi
+  name: BPI-F3
+  soc: SpacemiT K1
+  revision: null
+  physical_available: true
+  evidence_status: confirmed
+cpu:
+  isa: rv64gc
+  hart_count: 8
+  runner_hart_id: 0
+  monitor_hart_id: 1
+  boot_hart_id: 0
+  boot_privilege: M
+  evidence_status: partial
+memory:
+  dram_base: 0x04000000
+  dram_bytes: null
+  usable_limit: 0x80000000
+  firmware_load_address: 0x04000000
+  stack_bytes: 0x4000
+  staging_address: 0x0c200000
+  staging_max_bytes: 134217728
+  reserved_regions: []
+  evidence_status: confirmed
+uart:
+  controller: ns16550_compatible
+  base: 0xd4017000
+  size: 0x1000
+  register_width: 1
+  input_clock_hz: null
+  initialization_owner: boot_firmware_preserved
+  baud: 115200
+  serial_device: /dev/ttyUSB0
+  bidirectional_validated: true
+  evidence_status: partial
+timer:
+  mtime_address: 0xe400bff8
+boot:
+  medium: sd
+  image_format: opensbi_fit_partition_image
+  packaging_command: bash cert_harness/tools/build_profile.sh --board bpif3_k1 --profile ACT_PRIV_M_OWN_ENV --payload-transport uart_stream
+  install_command: sudo ./bpif3_act_flash.sh --image <boot_image.bin> --sd-dev <device>
+  recovery_procedure: Restore a known-good BPI-F3 SD image or the previously verified OpenSBI FIT in GPT partition 3.
+  linux_boot_validated: true
+  evidence_status: confirmed
+power:
+  remote_control_available: true
+  backend: tuya_smart_plug
+  device_name: configured_outside_git
+  validated: true
+  evidence_status: confirmed
+hypervisor:
+  isa_h_documented: false
+  csr_probe_validated: false
+  test_suite_url: null
+  execution_model: null
+  smoke_validated: false
+  evidence_status: unknown
+ci:
+  sanity_job: bpif3-uart-sanity
+  weekly_job: bpif3-uart-weekly
+  hardware_lock: bpif3-hardware
+  portal_slug: bananapi-f3
+  stable_runner_branch: vf2-uart-stream-jenkins
+  act_branch: sifive_u74
+  operational: true
+sources:
+  - kind: operational_board_preset
+    url: https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-/blob/vf2-uart-stream-jenkins/cert_harness/boards/bpif3_k1.env
+  - kind: board_adapter
+    url: https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-/blob/vf2-uart-stream-jenkins/cert_harness/board_adapters/bpif3_k1.sh
+  - kind: ci_pipeline
+    url: https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-/blob/vf2-uart-stream-jenkins/Jenkinsfile.bpif3-uart-sanity
+readiness:
+  state: hardware_smoke_passed
+  blockers: []

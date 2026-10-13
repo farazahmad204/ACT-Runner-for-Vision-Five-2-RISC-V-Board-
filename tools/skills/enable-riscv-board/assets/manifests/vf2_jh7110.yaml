@@ -1,0 +1,79 @@
+schema_version: 1
+board:
+  id: vf2_jh7110
+  vendor: StarFive
+  name: VisionFive 2
+  soc: JH7110
+  revision: null
+  physical_available: true
+  evidence_status: confirmed
+cpu:
+  isa: rv64gc
+  hart_count: 4
+  runner_hart_id: 1
+  monitor_hart_id: 2
+  boot_hart_id: 1
+  boot_privilege: M
+  evidence_status: confirmed
+memory:
+  dram_base: 0x40000000
+  dram_bytes: null
+  usable_limit: 0x100000000
+  firmware_load_address: 0x40000000
+  stack_bytes: 0x4000
+  staging_address: 0x88000000
+  staging_max_bytes: 134217728
+  reserved_regions: []
+  evidence_status: confirmed
+uart:
+  controller: ns16550_compatible
+  base: 0x10000000
+  size: 0x1000
+  register_width: 4
+  input_clock_hz: null
+  initialization_owner: boot_firmware_preserved
+  baud: 115200
+  serial_device: /dev/ttyUSB0
+  bidirectional_validated: true
+  evidence_status: confirmed
+timer:
+  mtime_address: 0x0200bff8
+boot:
+  medium: sd
+  image_format: padded_uboot_fit
+  packaging_command: bash cert_harness/tools/build_profile.sh --board vf2_jh7110 --profile ACT_PRIV_M_OWN_ENV --payload-transport uart_stream
+  install_command: ./vf2_act_flash.sh --image <boot_image.bin> --sd-dev <device>
+  recovery_procedure: Reflash a known-good VisionFive 2 SD image or previously verified runner boot image.
+  linux_boot_validated: true
+  evidence_status: confirmed
+power:
+  remote_control_available: true
+  backend: tuya_smart_plug
+  device_name: configured_outside_git
+  validated: true
+  evidence_status: confirmed
+hypervisor:
+  isa_h_documented: false
+  csr_probe_validated: false
+  test_suite_url: null
+  execution_model: null
+  smoke_validated: false
+  evidence_status: confirmed
+ci:
+  sanity_job: vf2-uart-sanity
+  weekly_job: vf2-uart-weekly
+  hardware_lock: vf2-hardware
+  portal_slug: visionfive2
+  stable_runner_branch: vf2-uart-stream-jenkins
+  act_branch: sifive_u74
+  operational: true
+sources:
+  - kind: operational_board_preset
+    url: https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-/blob/vf2-uart-stream-jenkins/cert_harness/boards/vf2_jh7110.env
+  - kind: board_adapter
+    url: https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-/blob/vf2-uart-stream-jenkins/cert_harness/board_adapters/vf2_jh7110.sh
+  - kind: ci_pipeline
+    url: https://github.com/farazahmad-10xe/ACT-Runner-for-Vision-Five-2-RISC-V-Board-/blob/vf2-uart-stream-jenkins/Jenkinsfile.uart-sanity
+readiness:
+  state: hardware_smoke_passed
+  blockers: []

@@ -1,0 +1,154 @@
+// Offline board enablement from a portal board request (admin "New board" page).
+// Runs tools/skills/enable-riscv-board/scripts/board_pipeline.py: find_docs (Codex web search) -> extract ->
+// resolve -> fill_gaps -> decide -> spec -> runner files -> ACT config -> build -> validate -> REPORT.md /
+// result.json, and reports progress and the result to the portal.
+// Never flashes, power-cycles, pushes or changes other jobs; the furthest state is offline_prepared.
+pipeline {
+    agent {
+        node {
+            label 'riscv-hw-agent'
+            customWorkspace '/data/ci/agent/workspace/riscv-board-pipeline'
+        }
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '50', artifactNumToKeepStr: '50'))
+        timeout(time: 2, unit: 'HOURS')
+        disableConcurrentBuilds()
+        timestamps()
+        skipDefaultCheckout(true)
+    }
+
+    parameters {
+        string(name: 'REQUEST_ID', defaultValue: '',
+            description: 'Portal board request id. Reuse it to resume the same run.')
+        text(name: 'BOARD_REQUEST_YAML', defaultValue: '',
+            description: 'Board request (assets/board_request.example.yaml), written by the portal.')
+        string(name: 'PORTAL_USER', defaultValue: '', description: 'Portal admin who submitted the request.')
+        string(name: 'RUNNER_BRANCH', defaultValue: 'vf2-uart-stream-jenkins',
+            description: 'Runner branch with tools/skills/enable-riscv-board; the board is also built against it.')
+        booleanParam(name: 'ALLOW_MODEL_CALLS', defaultValue: true,
+            description: 'Let find_docs search the web with Codex and fill_gaps read document excerpts with Codex.')
+        booleanParam(name: 'PUBLISH_RESULT', defaultValue: true,
+            description: 'Report progress and result.json to the portal.')
+    }
+
+    environment {
+        RUNNER_REMOTE_URL = 'https://github.com/farazahmad204/ACT-Runner-for-Vision-Five-2-RISC-V-Board-.git'
+        PIPELINE_ROOT = '/data/ci/agent/board-pipeline'
+        PORTAL_URL = 'https://apollo/portal/'
+        INTERNAL_CA_FILE = '/data/ci/agent/jenkins-internal-ca.crt'
+        CODEX_BIN = '/data/ci/bin/codex'
+        PATH = '/data/ci/bin:/data/ci/toolchains/riscv64/bin:/data/ci/toolchains/riscv-sail-0.14.1/bin:/usr/local/bin:/usr/bin:/bin'
+    }
+
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} · ${params.PORTAL_USER ?: 'manual'}"
+                }
+                sh '''#!/usr/bin/env bash
+                    set -euo pipefail
+                    [[ "$REQUEST_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$ ]] || { echo "invalid REQUEST_ID" >&2; exit 2; }
+                    [[ -n "$BOARD_REQUEST_YAML" ]] || { echo "BOARD_REQUEST_YAML is empty" >&2; exit 2; }
+                    run="$PIPELINE_ROOT/runs/$REQUEST_ID"
+                    src="$PIPELINE_ROOT/src/runner"
+                    mkdir -p "$run" "$PIPELINE_ROOT/src"
+                    [[ -d "$src/.git" ]] || git clone --quiet "$RUNNER_REMOTE_URL" "$src"
+                    git -C "$src" fetch --quiet origin "$RUNNER_BRANCH"
+                    git -C "$src" checkout --quiet --detach FETCH_HEAD
+                    git -C "$src" clean -fdxq
+                    echo "runner $RUNNER_BRANCH $(git -C "$src" rev-parse HEAD)"
+                    [[ -f "$src/tools/skills/enable-riscv-board/scripts/board_pipeline.py" ]] || {
+                      echo "RUNNER_BRANCH has no board_pipeline.py" >&2; exit 2; }
+                    printf '%s\\n' "$BOARD_REQUEST_YAML" > "$run/request.yaml"
+                    # The job decides what is built against; the request cannot point elsewhere.
+                    python3 - "$run/request.yaml" "$src" "$REQUEST_ID" <<'PY'
+import sys, yaml
+path, runner, rid = sys.argv[1:]
+req = yaml.safe_load(open(path)) or {}
+req.update(runner_checkout=runner, request_id=rid,
+           sail_exe="/data/ci/toolchains/riscv-sail-0.14.1/bin/sail_riscv_sim")
+req.setdefault("model", {}).setdefault("backend", "codex")
+for key in ("base_spec", "manifest", "research_dirs", "act_checkout", "dtb", "boot_logs"):
+    req.pop(key, None)            # portal requests start from evidence only, with no agent paths
+yaml.safe_dump(req, open(path, "w"), sort_keys=False)
+PY
+                    printf '%s\\n' "$run" > .run_dir
+                '''
+                withCredentials([string(credentialsId: 'riscv-portal-ingest-token', variable: 'PORTAL_INGEST_TOKEN')]) {
+                    sh '''#!/usr/bin/env bash
+                        [[ "$PUBLISH_RESULT" == true ]] || exit 0
+                        curl --silent --show-error --cacert "$INTERNAL_CA_FILE" -X POST \
+                          "${PORTAL_URL%/}/api/v1/board-requests/$REQUEST_ID/status/" \
+                          -H "X-Portal-Token: $PORTAL_INGEST_TOKEN" -H "Content-Type: application/json" \
+                          --data "{\\"status\\": \\"RUNNING\\", \\"build_url\\": \\"$BUILD_URL\\"}" > /dev/null || true
+                    '''
+                }
+            }
+        }
+
+        stage('Board pipeline') {
+            steps {
+                script {
+                    def rc = sh(returnStatus: true, script: '''#!/usr/bin/env bash
+                        set -uo pipefail
+                        run="$(cat .run_dir)"
+                        args=("$run/request.yaml" --work "$run/work")
+                        [[ "$ALLOW_MODEL_CALLS" == true ]] && args+=(--allow-model-calls)
+                        python3 "$PIPELINE_ROOT/src/runner/tools/skills/enable-riscv-board/scripts/board_pipeline.py" "${args[@]}"
+                    ''')
+                    if (rc == 2) {
+                        unstable('The board pipeline stopped for a person: see REPORT.md')
+                    } else if (rc != 0) {
+                        error("board_pipeline.py exited ${rc}")
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh '''#!/usr/bin/env bash
+                set -euo pipefail
+                rm -rf board-pipeline-export && mkdir -p board-pipeline-export
+                if [[ -f .run_dir ]]; then
+                  w="$(cat .run_dir)/work"
+                  for f in REPORT.md result.json state.json spec.yaml spec_review.md; do
+                    [[ -f "$w/$f" ]] && cp "$w/$f" board-pipeline-export/
+                  done
+                  for d in docs generated logs requirements_final research_fill_gaps build/out; do
+                    [[ -d "$w/$d" ]] && mkdir -p "board-pipeline-export/$(dirname "$d")" && cp -r "$w/$d" "board-pipeline-export/$d"
+                  done
+                fi
+            '''
+            archiveArtifacts artifacts: 'board-pipeline-export/**', allowEmptyArchive: true, fingerprint: true
+            withCredentials([string(credentialsId: 'riscv-portal-ingest-token', variable: 'PORTAL_INGEST_TOKEN')]) {
+                sh '''#!/usr/bin/env bash
+                    [[ "$PUBLISH_RESULT" == true ]] || exit 0
+                    api="${PORTAL_URL%/}/api/v1/board-requests/$REQUEST_ID"
+                    result="board-pipeline-export/result.json"
+                    if [[ -f "$result" ]]; then
+                      python3 - "$result" "$BUILD_URL" > board-pipeline-export/publish.json <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+data["build_url"] = sys.argv[2]
+print(json.dumps(data))
+PY
+                      curl --fail --silent --show-error --cacert "$INTERNAL_CA_FILE" -X POST "$api/result/" \
+                        -H "X-Portal-Token: $PORTAL_INGEST_TOKEN" -H "Content-Type: application/json" \
+                        --data-binary @board-pipeline-export/publish.json > /dev/null && echo "result published" \
+                        || echo "result not published" >&2
+                    else
+                      curl --silent --show-error --cacert "$INTERNAL_CA_FILE" -X POST "$api/status/" \
+                        -H "X-Portal-Token: $PORTAL_INGEST_TOKEN" -H "Content-Type: application/json" \
+                        --data "{\\"status\\": \\"ERROR\\", \\"build_url\\": \\"$BUILD_URL\\", \\"reason\\": \\"the pipeline produced no result; see the build log\\"}" \
+                        > /dev/null || true
+                    fi
+                '''
+            }
+        }
+    }
+}

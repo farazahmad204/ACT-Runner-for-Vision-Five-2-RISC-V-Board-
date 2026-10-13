@@ -1,0 +1,98 @@
+# ACT board spec for gen_act_config.py: Milk-V Megrez (ESWIN EIC7700X, SiFive P550).
+# Values from the reviewed hand-made config (ACT branch milkv-megrez-config 073917f, README).
+dut:
+  name: milkv-megrez-p550
+  vendor_dir: milkv_megrez
+  description: Milk-V Megrez, ESWIN EIC7700X, SiFive P550 (hart 1 runs ACT payloads).
+isa: rv64imafdch_zicntr_zicsr_zifencei_zihpm_zba_zbb_sscofpmf
+non_standard_extensions: true          # OpenSBI misa decode rv64imafdchx
+privilege_modes: [M, S, U]
+extra_extensions: [Sscounterenw, Sstvecd, Ssu64xl]
+virtual_memory: [sv39, sv48]
+priv_version: "1.11"
+hypervisor:
+  hardware_version: "0.6"
+test_hart: 1
+memory:                                 # runner payload window (BOARD_PAYLOAD_BASE/LIMIT)
+  base: 0x90000000
+  size: 0x20000000
+platform:
+  cpu_hz_max: 1800000000
+  mtime_hz: 1000000
+  cache_block_bytes: 64
+  access_fault_address: 0x0
+  clint: {base: 0x02000000}
+  plic:
+    base: 0x0c000000
+    sources: 520
+    test_hart_contexts: {m: 2, s: 3}
+  uart: {base: 0x50900000, reg_shift: 2, access_bytes: 4, plic_source: 100}
+  ids: {mvendorid: 0x489, marchid: 0x8000000000000008, mimpid: 0x6220425}
+csr:
+  phys_addr_bits: 41
+  asid_bits: 0
+  vmid_bits: 0
+  pmp: {entries: 8, encoding_entries: 16, granularity_bytes: 4096, na4: false, tor: true, napot: true}
+  hpm_counters: [3, 4, 5, 6]
+  hpm_counter_width: 48
+  hpm_inhibit: true
+  time_csr_implemented: false
+  mtvec: {modes: [0, 1], vectored_alignment: 256}
+  stvec: {modes: [0, 1], vectored_alignment: 128}
+  medeleg_writable: 0xF0B55D
+  mideleg_writable: 0x2222
+params:
+  MISALIGNED_LDST: false
+  MISALIGNED_LDST_EXCEPTION_PRIORITY: low
+evidence:
+  priv_version: {status: confirmed, source: "TRM Table 3-5; OpenSBI Priv Version v1.11"}
+  hypervisor.hardware_version: {status: confirmed, source: "TRM Table 3-5"}
+  csr.pmp: {status: confirmed, source: "TRM 3.4 PMP; OpenSBI; DTB"}
+  csr.phys_addr_bits: {status: derived, source: "OpenSBI PMP Address Bits 39 (+2)"}
+  csr.asid_bits: {status: confirmed, source: "Linux: ASID allocator disabled (0 bits)"}
+  csr.mtvec: {status: confirmed, source: "TRM Table 3-46"}
+  csr.stvec: {status: confirmed, source: "TRM Table 3-58"}
+  csr.medeleg_writable: {status: confirmed, source: "csr_probe 2026-10-05: medeleg <- ~0 reads 0xf0b55d (TRM Table 3-52 lists 0xF0B7FF; access faults 1/5/7 are not writable)"}
+  csr.hpm_counters: {status: confirmed, source: "OpenSBI MHPM Info 4 (0x78)"}
+  csr.hpm_counter_width: {status: confirmed, source: "csr_probe 2026-10-05: mhpmcounter3 <- ~0 reads 48 bits"}
+  csr.time_csr_implemented: {status: confirmed, source: "csr_probe 2026-10-05: rdtime traps (illegal instruction)"}
+  csr.vmid_bits: {status: confirmed, source: "csr_probe 2026-10-05: hgatp.VMID has 0 writable bits"}
+  platform.ids: {status: confirmed, source: "csr_probe 2026-10-05: mvendorid 0x489, marchid 0x8000000000000008, mimpid 0x6220425"}
+  platform.plic: {status: confirmed, source: "DTB interrupts-extended; TRM"}
+  platform.uart: {status: confirmed, source: "DTB eic7700-milkv-megrez-no-npu.dtb"}
+  platform.mtime_hz: {status: confirmed, source: "OpenSBI aclint; runner measurement"}
+  platform.cache_block_bytes: {status: confirmed, source: "DTB d-cache-block-size"}
+  platform.access_fault_address: {status: confirmed, source: "csr_probe 2026-10-05: load from 0x0 raises load access fault"}
+# ---- runner board layer (gen_board_files.py) ----
+runner:
+  board_id: milkv_megrez_eic7700x
+  description: Milk-V Megrez / ESWIN EIC7700X
+  platform_id: 3
+  monitor_hart: 2
+  load_address: 0x80000000
+  firmware_window_limit: 0x80080000
+  firmware_window_note: Stock OpenSBI/Linux report 0x80000000-0x8007ffff as M-mode reserved.
+  ram: {base: 0x80000000, limit: 0xC8000000}
+  excluded: {base: 0xB0000000, limit: 0xC0000000}
+  staging: {address: 0xC0000000, max_bytes: 134217728}
+  tohost_fallback: 0x90008000
+  uart: {size: 0x10000, access_bytes: 2, init_8250: true, input_clock_hz: 200000000, baud: 115200, rx_diag: false}
+  external_irq_cleanup: false
+  watchdog: null
+  serial_dev: /dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0
+  serial_note: |
+    Onboard USB-C debug UART (CH340B on UART0). An external USB-TTL adapter
+    cannot transmit to the board while USB-C is connected; see README.md.
+  toolchain_dir: /home/lpt-10xe/riscv64/bin
+boot:
+  pattern: eswin_nsign
+  image: bootloader_secboot_ddr5.bin
+  slot: fw_payload.bin in the ESWIN SPI boot chain
+  eswin_nsign:
+    root_env: MEGREZ_NSIGN_ROOT
+    short_name: Megrez
+    sums_file: megrez_packaging_sha256sums.txt
+    flash_message:
+      - "Megrez SPI flashing is not automated: it needs Recovery mode,"
+      - the official U-Boot and explicit approval. Use cert_harness/tools/megrez_uboot_session.py
+      - as described in cert_harness/boards/milkv_megrez_eic7700x/README.md.

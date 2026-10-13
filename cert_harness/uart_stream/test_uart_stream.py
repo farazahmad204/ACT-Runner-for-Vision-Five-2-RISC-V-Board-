@@ -54,3 +54,22 @@ class UartStreamProtocolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PayloadStartedTests(unittest.TestCase):
+    def test_a_received_and_started_payload_without_a_result_is_a_timeout_not_a_transport_error(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "run_elf_batch", Path(__file__).with_name("run_elf_batch.py"))
+        batch = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(batch)
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "case.uart.log"
+            # Megrez riscv-uart-single-elf #15: received, started, never wrote tohost.
+            log.write_bytes(b"[UART_STREAM] READY version=1\n[UART_STREAM] HEADER_OK name=payload\n"
+                            b"[UART_STREAM] RX_OK name=payload size=4704\n[CASE] START name=payload\n"
+                            b"[RST] test timeout disabled; monitor timeout observed\n")
+            self.assertTrue(batch.payload_started(log))
+            log.write_bytes(b"[UART_STREAM] READY version=1\n")  # never received: retry is right
+            self.assertFalse(batch.payload_started(log))
+            self.assertFalse(batch.payload_started(Path(temporary) / "missing.log"))

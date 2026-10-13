@@ -16,6 +16,8 @@ pipeline {
 
     parameters {
         string(name: 'SUBMISSION_ID', defaultValue: '', description: 'Portal submission UUID.')
+        string(name: 'PORTAL_USER', defaultValue: '', description: 'Portal user who uploaded the ELF (shown in the build title).')
+        string(name: 'PORTAL_SUBMISSION_URL', defaultValue: '', description: 'Portal page of this submission.')
         choice(name: 'TARGET_BOARD', choices: ['visionfive2', 'bananapi-f3', 'milkv-megrez'],
                description: 'Physical board selected on the portal.')
         string(name: 'ELF_DOWNLOAD_URL', defaultValue: '', description: 'Token-protected portal ELF URL.')
@@ -52,6 +54,14 @@ pipeline {
     stages {
         stage('Clean Checkout') {
             steps {
+                script {
+                    // The portal starts this job with its own Jenkins account; name the uploader.
+                    def who = params.PORTAL_USER?.trim() ?: 'unknown user'
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} · ${who} · ${params.ELF_NAME}"
+                    def link = params.PORTAL_SUBMISSION_URL?.trim() ?
+                        " | <a href=\"${params.PORTAL_SUBMISSION_URL.trim()}\">Portal submission</a>" : ''
+                    currentBuild.description = "Run ELF by ${who} on ${params.TARGET_BOARD}${link}"
+                }
                 deleteDir()
                 sh '''#!/usr/bin/env bash
                     set -euo pipefail
@@ -80,6 +90,19 @@ pipeline {
                     test -x ci/jenkins/single_elf_uart.sh
                     python3 ci/check_minimal_uart_repo.py
                 '''
+            }
+        }
+
+        stage('Report Start') {
+            steps {
+                withCredentials([string(credentialsId: 'riscv-portal-ingest-token',
+                                        variable: 'PORTAL_INGEST_TOKEN')]) {
+                    sh '''#!/usr/bin/env bash
+                        python3 ci/jenkins/report_submission_status.py \
+                          --submission-id "$SUBMISSION_ID" --status RUNNING --build-url "$BUILD_URL" \
+                          --portal-url "$PORTAL_URL" --ca-file "$INTERNAL_CA_FILE" || true
+                    '''
+                }
             }
         }
 
@@ -181,8 +204,27 @@ pipeline {
                     def portalFile = "logs/jenkins/single_elf/${env.BUILD_NUMBER}/portal_url.txt"
                     if (fileExists(portalFile)) {
                         def portalUrl = readFile(portalFile).trim()
-                        currentBuild.description = "<a href=\"${portalUrl}\">Portal UART result</a>"
+                        currentBuild.description += " | <a href=\"${portalUrl}\">Portal UART result</a>"
                         echo "Portal result: ${portalUrl}"
+                    }
+                }
+            }
+            script {
+                // No published result (an abort, a download or board failure): tell the portal,
+                // so the submission does not stay "Queued".
+                if (!fileExists("logs/jenkins/single_elf/${env.BUILD_NUMBER}/portal_url.txt") &&
+                        fileExists('ci/jenkins/report_submission_status.py')) {
+                    def finalStatus = currentBuild.currentResult == 'ABORTED' ? 'ABORTED' : 'ERROR'
+                    withCredentials([string(credentialsId: 'riscv-portal-ingest-token',
+                                            variable: 'PORTAL_INGEST_TOKEN')]) {
+                        withEnv(["FINAL_STATUS=${finalStatus}", "FINAL_RESULT=${currentBuild.currentResult}"]) {
+                            sh '''#!/usr/bin/env bash
+                                python3 ci/jenkins/report_submission_status.py \
+                                  --submission-id "$SUBMISSION_ID" --status "$FINAL_STATUS" --build-url "$BUILD_URL" \
+                                  --portal-url "$PORTAL_URL" --ca-file "$INTERNAL_CA_FILE" \
+                                  --reason "Jenkins build ended $FINAL_RESULT without a published result" || true
+                            '''
+                        }
                     }
                 }
             }

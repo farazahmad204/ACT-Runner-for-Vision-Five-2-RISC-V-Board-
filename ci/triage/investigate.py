@@ -6,7 +6,8 @@ Codex keeps all of its own tools disabled, so the model never touches the machin
 only reads this run's kept files and the agent's knowledge. Every reply states the hypothesis
 being tested and the AI's best answer so far; the tool's result goes back with the whole
 transcript, until the AI answers or the step budget runs out (then the last best answer
-stands). The answer is then checked like any other (agent.check_answer), and the steps are
+stands). An answer that claims a hardware bug, or is Inconclusive or low confidence, is not
+accepted before the AI has checked it with at least one tool: it is sent back once. The answer is then checked like any other (agent.check_answer), and the steps are
 kept in the report.
 """
 
@@ -43,6 +44,15 @@ TOOLS = {
     "sail_config": "<words> the board's Sail settings (sail.json) that mention them",
 }
 ACTIONS = ["answer", *TOOLS]
+CHALLENGE = ("Before this answer is accepted, check it: run at least one tool whose result would "
+             "confirm or rule it out (for example what Sail did at the failing address, or what the "
+             "board's spec version says about it), then answer.")
+
+
+def needs_check(reply: dict[str, Any]) -> bool:
+    """Answers that must not stand on the first look alone."""
+    return (reply.get("classification") in ("DUT noncompliance", "Inconclusive")
+            or reply.get("confidence") == "low")
 
 
 class Toolbox:
@@ -163,6 +173,12 @@ def investigate(prompt: str, ask: Callable[[str], tuple[str, dict[str, Any]]], t
         except (json.JSONDecodeError, TypeError):
             return text, raw, steps
         action = str(reply.get("action") or "answer") if isinstance(reply, dict) else "answer"
+        if action == "answer" and left > 0 and not steps and needs_check(reply):
+            steps.append({"step": 1, "hypothesis": str(reply.get("root_cause") or "")[:400],
+                          "tool": "challenge", "argument": f"{reply.get('classification')}, "
+                                                           f"{reply.get('confidence')} confidence",
+                          "result": CHALLENGE})
+            continue
         if action == "answer" or left <= 0:
             return text, raw, steps
         argument = str(reply.get("argument") or "")

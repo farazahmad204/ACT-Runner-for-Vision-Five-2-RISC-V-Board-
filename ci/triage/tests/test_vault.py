@@ -160,7 +160,7 @@ class RunTriageVaultTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            kw = dict(ai_enabled=True, ai_config=AIConfig(), ai_analyzer=fake_ai)
+            kw = dict(ai_enabled=True, ai_config=AIConfig(max_steps=0), ai_analyzer=fake_ai)
             first = self._run(root, {}, **kw)
             self.assertEqual(len(prompts), 1)
             self.assertEqual(self._run(root, {}, **kw)["results"][0]["ai_status"], "MEMORY")

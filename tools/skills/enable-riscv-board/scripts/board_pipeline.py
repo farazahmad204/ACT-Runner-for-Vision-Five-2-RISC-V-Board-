@@ -109,6 +109,17 @@ def file_hash(paths: list[Path | str | None], extra: Any = None) -> str:
     return h.hexdigest()
 
 
+def dtb_to_dts(path: Path) -> Path | None:
+    """The device tree as text (dtc), next to the blob; None without dtc."""
+    out = path.with_suffix(".dts")
+    if out.is_file():
+        return out
+    if not shutil.which("dtc"):
+        return None
+    r = subprocess.run(["dtc", "-q", "-I", "dtb", "-O", "dts", "-o", str(out), str(path)], capture_output=True)
+    return out if r.returncode == 0 and out.is_file() else None
+
+
 class Pipeline:
     def __init__(self, request_path: Path, work: Path, args: argparse.Namespace) -> None:
         self.req_path = request_path.resolve()
@@ -133,10 +144,27 @@ class Pipeline:
         if not sources.is_file():
             return
         docs = self.req.setdefault("documents", [])
+        logs = self.req.setdefault("boot_logs", {}) if isinstance(self.req.get("boot_logs"), (dict, type(None))) else {}
         for rec in (yaml.safe_load(sources.read_text()) or {}).get("documents") or []:
-            path = str(self.work / "docs" / rec["file"]) if rec.get("status") == "saved" else None
-            if path and path not in docs:
-                docs.append(path)
+            if rec.get("status") != "saved":
+                continue
+            for name in [rec["file"], *(rec.get("extra_files") or [])]:
+                path = self.work / "docs" / name
+                if path.suffix.lower() == ".dtb":
+                    # A device tree feeds extract (harts, UART, timer, PLIC, memory) and, as text, fill_gaps.
+                    self.req.setdefault("dtb", str(path))
+                    path = dtb_to_dts(path) or path
+                    if path.suffix.lower() == ".dtb":
+                        continue
+                elif rec.get("kind") == "boot_log" and path.is_file():
+                    text = path.read_text(errors="replace")
+                    for kind, marker in (("opensbi", "OpenSBI"), ("uboot", "U-Boot"), ("linux", "Linux version")):
+                        if marker in text:
+                            logs.setdefault(kind, str(path))
+                if str(path) not in docs:
+                    docs.append(str(path))
+        if logs:
+            self.req["boot_logs"] = logs
 
     def fetch_documents(self) -> None:
         """Download {url, sha256} documents (portal uploads) into <work>/inputs and verify them."""

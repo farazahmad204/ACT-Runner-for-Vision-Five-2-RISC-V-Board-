@@ -87,6 +87,20 @@ class FindBoardDocsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fbd.fetch("file:///etc/passwd")
 
+    def test_release_pages_give_their_pdf_assets(self) -> None:
+        api = json.dumps([{"assets": [{"name": "notes.txt", "browser_download_url": "https://x/notes.txt"}]},
+                          {"assets": [{"name": "TRM_Part1.pdf", "browser_download_url": "https://x/TRM_Part1.pdf"},
+                                      {"name": "TRM_Part2.pdf", "browser_download_url": "https://x/TRM_Part2.pdf"}]}])
+        pages = {"https://api.github.com/repos/v/trm/releases": (api.encode(), "application/json"),
+                 "https://x/TRM_Part1.pdf": (b"%PDF-1", "application/pdf"),
+                 "https://x/TRM_Part2.pdf": (b"%PDF-2", "application/pdf")}
+        with tempfile.TemporaryDirectory() as temporary:
+            record = fbd.save_document(1, {"url": "https://github.com/v/trm/releases", "title": "TRM"},
+                                       Path(temporary), lambda url: pages[url])
+        self.assertEqual(record["file"], "01_1_TRM_Part1.pdf")
+        self.assertEqual(record["extra_files"], ["01_2_TRM_Part2.pdf"])
+        self.assertIn("eic7700", fbd.keywords_for("Milk-V Megrez", "ESWIN EIC7700X", "milkv_megrez"))
+
     def test_search_runs_codex_with_web_search_and_no_other_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)

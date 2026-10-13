@@ -85,6 +85,7 @@ REPO_FILES = re.compile(r"\.(dts|dtsi|its|its\.in|ld|lds|h|c|S|mk|cfg|conf|txt|m
                         r"(^|/)(Kconfig|Makefile|objects\.mk|config\.mk|[^/]*defconfig)$")
 REPO_LIMIT = 400_000  # characters gathered per repository
 REPO_FILE_LIMIT = 300  # matching files fetched per repository
+MAX_ASSETS = 4  # PDFs saved from one release or repository
 
 
 def needs() -> str:
@@ -179,6 +180,23 @@ def repo_url(url: str) -> tuple[str, str] | None:
     return f"https://{m.group(1)}/{m.group(2)}.git", branch
 
 
+def release_assets(url: str, get: Callable[[str], tuple[bytes, str]]) -> list[str]:
+    """PDF assets of a GitHub releases page (they are not in its HTML), newest release first."""
+    m = re.match(r"^https://github\.com/([^/]+/[^/]+)/releases(?:/tag/([^/?#]+)|/latest)?/?$", url)
+    if not m:
+        return []
+    api = f"https://api.github.com/repos/{m.group(1)}/releases" + (f"/tags/{m.group(2)}" if m.group(2) else "")
+    body, _kind = get(api)
+    data = json.loads(body)
+    releases = data if isinstance(data, list) else [data]
+    for release in releases:
+        pdfs = [a["browser_download_url"] for a in release.get("assets") or []
+                if str(a.get("name", "")).lower().endswith(".pdf")]
+        if pdfs:
+            return pdfs[:MAX_ASSETS]
+    return []
+
+
 def fetch(url: str) -> tuple[bytes, str]:
     """(body, content type) of an http(s) URL, bounded."""
     if urllib.parse.urlparse(url).scheme not in ("http", "https"):
@@ -206,6 +224,17 @@ def slug(text: str) -> str:
 
 def save_document(index: int, doc: dict[str, Any], out: Path,
                   get: Callable[[str], tuple[bytes, str]]) -> dict[str, Any]:
+    assets = release_assets(doc["url"].strip(), get)
+    if assets:
+        files = []
+        for number, asset in enumerate(assets, start=1):
+            body, _kind = get(asset)
+            path = out / f"{index:02d}_{number}_{slug(Path(urllib.parse.urlparse(asset).path).stem)}.pdf"
+            path.write_bytes(body)
+            files.append(path.name)
+        first = out / files[0]
+        return {"file": files[0], "extra_files": files[1:], "assets": assets,
+                "sha256": hashlib.sha256(first.read_bytes()).hexdigest(), "bytes": first.stat().st_size}
     url = raw_url(doc["url"].strip())
     body, kind = get(url)
     name = f"{index:02d}_{slug(doc.get('title') or url)}"
@@ -244,28 +273,56 @@ def clone_repo(index: int, doc: dict[str, Any], out: Path, keywords: list[str]) 
             command += ["--branch", branch]
         git(*command, clone, str(target))
         commit = git("-C", str(target), "rev-parse", "HEAD").strip()
-        names = [n for n in git("-C", str(target), "ls-tree", "-r", "--name-only", "HEAD").splitlines()
-                 if REPO_FILES.search(n) and any(k in n.lower() for k in keywords)][:REPO_FILE_LIMIT]
-        if not names:
+        tree = git("-C", str(target), "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+        names = [n for n in tree if REPO_FILES.search(n) and any(k in n.lower() for k in keywords)][:REPO_FILE_LIMIT]
+        # Binary documents: the repository's PDFs (a TRM repository) and the board's device trees.
+        useful = re.compile(r"schemat|manual|trm|reference|user.?guide|hardware|datasheet", re.I)
+        pdfs = sorted((n for n in tree if n.lower().endswith(".pdf")),
+                      key=lambda n: (not any(k in n.lower() for k in keywords), not useful.search(n), n))
+        binaries = (pdfs[:MAX_ASSETS]
+                    + [n for n in tree if n.lower().endswith(".dtb") and any(k in n.lower() for k in keywords)][:2])
+        if not names and not binaries:
             raise ValueError(f"no files naming {', '.join(keywords)}")
-        git("-C", str(target), "checkout", "HEAD", "--", *names)  # fetches only these blobs
+        fetched = []
+        for start in range(0, len(names) + len(binaries), 50):  # only these blobs are downloaded
+            batch = (names + binaries)[start:start + 50]
+            try:
+                git("-C", str(target), "checkout", "HEAD", "--", *batch)
+                fetched += batch
+            except subprocess.CalledProcessError:
+                continue  # an unreadable path costs its batch, not the repository
+        extra = []
+        for name in (b for b in binaries if b in fetched):
+            data = (target / name).read_bytes()
+            if len(data) <= MAX_BYTES:
+                dest = out / f"{index:02d}_{slug(Path(name).stem)}{Path(name).suffix.lower()}"
+                dest.write_bytes(data)
+                extra.append(dest.name)
         parts, size = [], 0
-        for name in names:
+        for name in (n for n in names if n in fetched):
             text = (target / name).read_text(encoding="utf-8", errors="replace")
             block = f"\n===== {clone} @ {commit[:12]} : {name} =====\n{text}\n"
             if size + len(block) > REPO_LIMIT:
                 break
             parts.append(block)
             size += len(block)
+    if not parts and not extra:
+        raise ValueError(f"no readable files naming {', '.join(keywords)}")
+    if not parts:
+        first = out / extra[0]
+        return {"file": extra[0], "extra_files": extra[1:], "commit": commit, "files": 0,
+                "sha256": hashlib.sha256(first.read_bytes()).hexdigest(), "bytes": first.stat().st_size}
     path = out / f"{index:02d}_{slug(doc.get('title') or clone)}_repo.txt"
     path.write_text(f"Source: {clone} @ {commit}\n" + "".join(parts), encoding="utf-8")
-    return {"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    return {"file": path.name, "extra_files": extra, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "bytes": path.stat().st_size, "commit": commit, "files": len(parts)}
 
 
 def keywords_for(board: str, soc: str, board_id: str) -> list[str]:
-    words = re.findall(r"[a-z0-9]{3,}", f"{board} {soc} {board_id}".lower())
-    return sorted({w for w in words if w not in {"the", "board", "soc", "risc", "and"}})
+    words = set(re.findall(r"[a-z0-9]{3,}", f"{board} {soc} {board_id}".lower()))
+    # A part number's family: eic7700x -> eic7700 (files are often named after the family).
+    words |= {m.group(1) for w in words if (m := re.match(r"^([a-z]+\d{3,})[a-z]{1,2}$", w))}
+    return sorted(w for w in words if w not in {"the", "board", "soc", "risc", "and"})
 
 
 def collect(found: dict[str, Any], out: Path, args: argparse.Namespace,

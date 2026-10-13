@@ -88,10 +88,9 @@ class PipelineTests(unittest.TestCase):
     def test_megrez_request_until_spec(self) -> None:
         example = SKILL / "assets" / "board_request.example.yaml"
         req = yaml.safe_load(example.read_text())
-        for key in ("dtb", "documents"):
-            paths = req[key] if isinstance(req[key], list) else [req[key]]
-            if not all(Path(p).exists() for p in paths):
-                self.skipTest("Megrez evidence files are not on this machine")
+        paths = [*req["documents"], req["dtb"], *req["boot_logs"].values(), req["user_answers"]]
+        if not all((example.parent / p).exists() for p in paths):
+            self.skipTest("Megrez evidence files are not on this machine")
         with tempfile.TemporaryDirectory() as d:
             args = argparse.Namespace(allow_model_calls=False, udb_validate=False, from_step=None, until="spec",
                                       force=False)
@@ -115,6 +114,25 @@ class PipelineTests(unittest.TestCase):
             reqs = {r["id"]: r for r in result["requirements"]}
             self.assertEqual(reqs["boot.medium"]["status"], "resolved")
             self.assertIn("uart.base", reqs)
+
+    def test_found_dtb_and_boot_logs_feed_extract(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            (work / "docs").mkdir()
+            (work / "docs" / "02_log.txt").write_text("OpenSBI v1.4\nU-Boot 2024.01\n")
+            (work / "docs" / "03_board.dtb").write_bytes(b"\xd0\x0d\xfe\xed")
+            (work / "docs" / "sources.yaml").write_text(yaml.safe_dump({"documents": [
+                {"kind": "boot_log", "status": "saved", "file": "02_log.txt"},
+                {"kind": "device_tree", "status": "saved", "file": "03_board.dtb"}]}))
+            request = work / "request.yaml"
+            request.write_text(yaml.safe_dump({"board_id": "vendor_x1"}))
+            args = argparse.Namespace(allow_model_calls=False, udb_validate=False, from_step=None,
+                                      until="find_docs", force=False)
+            pipeline = bp.Pipeline(request, work, args)
+        self.assertEqual(pipeline.req["boot_logs"], {"opensbi": str(work / "docs" / "02_log.txt"),
+                                                     "uboot": str(work / "docs" / "02_log.txt")})
+        self.assertEqual(pipeline.req["dtb"], str(work / "docs" / "03_board.dtb"))
+        self.assertNotIn(str(work / "docs" / "03_board.dtb"), pipeline.req["documents"])  # binary: not text
 
     def test_found_documents_join_the_request_and_the_result(self) -> None:
         with tempfile.TemporaryDirectory() as d:

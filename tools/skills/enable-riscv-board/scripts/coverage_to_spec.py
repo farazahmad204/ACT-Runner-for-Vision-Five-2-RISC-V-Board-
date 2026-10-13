@@ -72,13 +72,28 @@ def context(key: str) -> Callable[[Any], int]:
     return conv
 
 
+RANGE = re.compile(r"^\s*(0[xX][0-9a-fA-F_]+|\d+)\s*(?:-|–|\.\.|to)\s*(0[xX][0-9a-fA-F_]+|\d+)\s*$")
+
+
+def as_region(v: Any) -> tuple[int, int]:
+    """(start, end inclusive) from {start, end} or a "0xSTART-0xEND" string (documents give both)."""
+    if isinstance(v, dict) and "start" in v and "end" in v:
+        return as_int(v["start"]), as_int(v["end"])
+    match = RANGE.match(str(v)) if isinstance(v, str) else None
+    if match:
+        return as_int(match.group(1)), as_int(match.group(2))
+    raise Unparsed(f"expected a range START-END, got {v!r}")
+
+
 def firmware_window_limit(v: Any, cov: dict) -> int:
     """End of the reserved region holding the load address (exclusive)."""
+    if isinstance(v, str) and RANGE.match(v):
+        v = [v]
     if not isinstance(v, list):
         return as_int(v)
     load = as_int(cov["boot.load_address"]["value"])
     for region in v:
-        start, end = as_int(region["start"]), as_int(region["end"])
+        start, end = as_region(region)
         if start <= load <= end:
             return end + 1
     raise Unparsed(f"no firmware window contains the load address {load:#x}")

@@ -217,6 +217,36 @@ workbook's AI analysis column. It is advisory and never changes a verdict.
 - `AI_TRIAGE_MODEL`: blank uses the provider's default model.
 - `AI_TRIAGE_MAX_FAILURES`: cap on AI calls; `0` analyzes every failure.
 - `AI_TRIAGE_MAX_STEPS`: tool steps per AI analysis (default 3); `0` answers at once.
+- `AI_TRIAGE_MODE`: `single` (default for the weekly jobs) or `skills` (default in
+  `riscv-uart-triage`), see below.
+
+## Skill-driven investigation (`AI_TRIAGE_MODE=skills`)
+
+The AI works like a verification engineer instead of answering one large question. It uses
+debugging skills, `skills/<name>.md` (instructions) plus `skills.py` (the evidence each skill
+contributes, with ids such as `spec.2`):
+
+| Skill | Evidence |
+|---|---|
+| `log` | failed check, expected vs observed, trap cause/PC/tval, rule-based reading |
+| `instruction` | disassembly at the failing PC, test code at the check |
+| `csr_privilege` | value diff, measured absent CSRs and writable masks, sail.json settings |
+| `memory_mmu` | decoded satp/hgatp/vsatp and PTEs, fault kind, translation settings |
+| `reference` | what Sail did at the same instruction, and its setup |
+| `spec` | passages of the spec versions the board implements, normative rules |
+| `act_framework` | test header, the board's RVMODEL macros, ACT revision |
+| `history` | vault notes, riscv-arch-test issues, earlier findings |
+
+Loop per failure signature: code loads the failure card (`log`, `instruction`) and the first
+skill of a default plan chosen from the failure (`skills.plan`: category, test name, trap
+cause); the model keeps competing hypotheses and, one reply at a time, loads the skill or
+runs the tool that best separates them, up to `AI_TRIAGE_MAX_STEPS`. Only loaded skills are
+in the question. The answer must cite evidence ids; an answer citing none, or a hardware bug,
+Inconclusive or low-confidence answer, is sent back once. `check_answer` drops ids the
+investigation did not produce, and DUT noncompliance also needs cited spec evidence. The
+report keeps the steps (`investigation`) and the cited evidence (`evidence`).
+
+Compare the modes with `EVALUATE=true` on the same build, once per mode.
 
 If the AI cannot run (no `codex`, not logged in, no key), the job says why and
 runs deterministic triage only. `ci/triage/jenkins_triage.sh` holds that logic

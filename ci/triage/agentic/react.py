@@ -24,6 +24,7 @@ from . import decoder as riscv_state_decoder
 from . import tools as triage_tools
 from .knowledge import KNOWLEDGE_DIR, curated_knowledge_for, filter_knowledge  # noqa: F401
 from .state import CaseState
+from . import spec_alignment
 
 
 CLASSIFICATIONS = {
@@ -184,7 +185,7 @@ FAILURE_LINES = re.compile(r"RVCP: |\[TRAP|\[FAILSCR_PROV\]|\[CASE\]|\[UART_STRE
 
 
 def build_user_payload(case: str, inputs: dict, max_steps: int, hardware: str = "", errata: str = "",
-                       log_chars: int = 2500, known_issues: str = "") -> str:
+                       log_chars: int = 2500, known_issues: str = "", alignment: str = "") -> str:
     """The first message: the target hardware profile first, then the board's errata, then the
     runtime failure log (its diagnostic lines), then the inputs for the tools."""
     parts = []
@@ -192,6 +193,8 @@ def build_user_payload(case: str, inputs: dict, max_steps: int, hardware: str = 
                                                                            "given; do not assume ISA or MMU facts"))
     if errata:
         parts.append(errata)
+    if alignment:  # [TEST INTENT] and [SPECIFICATION INVARIANTS]
+        parts.append(alignment)
     if known_issues:
         parts.append("REPORTED ISSUES THAT MAY MATCH (check the test, bin and values match before relying on "
                      "one):\n" + known_issues)
@@ -388,7 +391,7 @@ def knowledge_for(case: str, profile: dict | None, tool: str, result: dict, show
 
 def run_react(case: str, inputs: dict, out_dir: Path, backend_name: str = "codex", model: str = "",
               max_steps: int = 12, backend=None, hardware: str = "", profile: dict | None = None,
-              codex_bin: str = "", known_issues: str = "") -> dict:
+              codex_bin: str = "", known_issues: str = "", alignment: str = "") -> dict:
     """Investigate one failed case with the ReAct loop; returns the final payload. The state is
     saved to out_dir/agent_state.json after every step, the final answer to agent_final.json."""
     state = CaseState(out_dir / "agent_state.json", case, inputs)
@@ -397,7 +400,9 @@ def run_react(case: str, inputs: dict, out_dir: Path, backend_name: str = "codex
                    "codex": lambda: CodexBackend(model, state, codex_bin)}[backend_name]()
     errata = platform_errata(profile)
     state.data["knowledge_filter"] = filter_knowledge(profile)[1]
-    user = build_user_payload(case, inputs, max_steps, hardware, errata, known_issues=known_issues)
+    user = build_user_payload(case, inputs, max_steps, hardware, errata, known_issues=known_issues,
+                              alignment=alignment)
+    intent_shown = set(re.findall(r'"coverpoint": "([^"]+)"', alignment))
     state.data["payload"] = {"hardware": bool(hardware), "errata": bool(errata), "chars": len(user)}
     backend.start(SYSTEM_PROMPT, user)
     if profile is None:  # without a board description, XLEN and ISA come from the ISA string
@@ -445,6 +450,16 @@ def run_react(case: str, inputs: dict, out_dir: Path, backend_name: str = "codex
                     state.data["sanity"].append(item)
                     text += f"\n\nARCHITECTURAL SANITY ({item['check']}): {item['message']}. Allowed " \
                             f"classifications: {', '.join(item['allowed'])}."
+            label = str(result.get("symbol") or "") if call.name == "tool_get_disassembly" else ""
+            source = inputs.get("test_source_path")
+            if source and spec_alignment.CHECK_LABEL.match(label + ":"):
+                intent = spec_alignment.extract_test_intent(source, label)
+                cp = (intent.get("failing_check") or {}).get("coverpoint")
+                if cp and cp not in intent_shown:  # the agent found the failing check: its intent now
+                    intent_shown.add(cp)
+                    text += "\n\n" + spec_alignment.render_sections(
+                        intent, spec_alignment.fetch_isa_invariants({"case": case}, profile,
+                                                                     intent.get("rule_ids") or []))
             if knowledge:  # curated rules for exactly what this observation revealed
                 text += "\n\n" + knowledge
                 state.data.setdefault("knowledge", []).append({"after_step": len(state.data["steps"]) + 1,

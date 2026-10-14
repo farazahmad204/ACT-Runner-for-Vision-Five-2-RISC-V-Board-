@@ -17,7 +17,7 @@ from typing import Any, Callable
 from .. import casefile, sail_trace, vault
 from .. import spec as spec_index
 from ..context import issue_terms, related_issues
-from . import hardware, react
+from . import decoder, hardware, react, spec_alignment
 from . import tools as agent_tools
 
 BOARD_KNOWLEDGE = Path(__file__).resolve().parents[1] / "board_knowledge"
@@ -58,6 +58,7 @@ def case_inputs(run_root: Path, record: dict[str, Any], profile: dict[str, Any])
         "elf_path": str(elf) if elf.is_file() and checks.get("elf_matches") is not False else None,
         "sail_trace_path": str(run_root / "triage" / "sail_traces" / f"{folder.name}.sig.trace"),
         "isa": profile.get("implemented_isa") or "",
+        "test_source_path": str(folder / "test.S") if (folder / "test.S").is_file() else None,
         "context_checks": [n for n in notes if n.startswith(("MISMATCH", "UNCHECKED"))],
     }
 
@@ -101,6 +102,49 @@ def install_hooks(run_root: Path, case: str, knowledge: dict[str, Any], profile:
     os.environ["TRIAGE_TOOL_ROOTS"] = str(run_root.resolve())
 
 
+def failure_symptom(record: dict[str, Any]) -> dict[str, Any]:
+    """The failure footprint from the deterministic evidence, for fetch_isa_invariants."""
+    evidence = record["evidence"]
+    ex = evidence.get("extracted", {})
+    cause = ex.get("trap_mcause") or ex.get("xcause") or ex.get("mcause")
+    trap = {}
+    if cause:
+        try:
+            trap = {"mcause": cause, "cause_name": decoder.decode_register("mcause", str(cause))["fields"]["name"]}
+        except ValueError:
+            trap = {"mcause": cause}
+    return {"case": evidence.get("case"), "category": evidence.get("deterministic_category"),
+            "failure": ex.get("failure") or ex.get("test_info"), "trap": trap,
+            "mismatch": {"register": ex.get("mismatching_field") or ex.get("register")},
+            "trap_handler_mode": ex.get("trap_handler_mode")}
+
+
+def test_alignment(run_root: Path, record: dict[str, Any], profile: dict[str, Any], inputs: dict[str, Any]) -> str:
+    """[TEST INTENT] and [SPECIFICATION INVARIANTS] for the agent's first message. The failing
+    check is the label at the trap PC (else the reported failing address) in the board ELF."""
+    if not inputs.get("test_source_path"):
+        return ""
+    roots = spec_alignment.testplan_roots(run_root)
+    if roots:
+        os.environ["TRIAGE_ACT_ROOT"] = str(roots[0].parent)
+    ex = record["evidence"].get("extracted", {})
+    label = None
+    elf = inputs.get("elf_path")
+    for key in ("xepc", "trap_mepc", "mepc", "approx_address"):
+        try:
+            pc = int(str(ex.get(key)), 16)
+        except (TypeError, ValueError):
+            continue
+        if elf and pc:
+            below = [(a, n) for a, n in sail_trace._symbols(elf) if a <= pc]
+            if below:
+                label = max(below)[1]
+                break
+    intent = spec_alignment.extract_test_intent(inputs["test_source_path"], label, run_root)
+    invariants = spec_alignment.fetch_isa_invariants(failure_symptom(record), profile, intent.get("rule_ids") or [])
+    return spec_alignment.render_sections(intent, invariants)
+
+
 def to_answer(final: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """The agent's final payload as the report/memory answer."""
     klass = CLASS_MAP.get(final.get("failure_classification"), "Inconclusive")
@@ -140,6 +184,7 @@ def analyze(run_root: Path, record: dict[str, Any], knowledge: dict[str, Any], p
     inputs = case_inputs(run_root, record, profile)
     install_hooks(run_root, inputs["case"], knowledge, profile)
     hardware_text = hardware.get_hardware_context_string(profile)
+    alignment = test_alignment(run_root, record, profile, inputs)
     # The team's issue notes that match (not ones that already explain it: those answered
     # before the agent) and similar riscv-arch-test issues.
     lines = vault.context_lines(record.get("known_issues") or [])
@@ -150,7 +195,7 @@ def analyze(run_root: Path, record: dict[str, Any], knowledge: dict[str, Any], p
         backend = backend_factory(react.CaseState(out_dir / "agent_state.json", inputs["case"], inputs))
     final = react.run_react(inputs["case"], inputs, out_dir, backend_name=provider, model=model,
                             max_steps=max_steps, backend=backend, hardware=hardware_text, profile=profile,
-                            codex_bin=codex_bin, known_issues="\n".join(lines))
+                            codex_bin=codex_bin, known_issues="\n".join(lines), alignment=alignment)
     state = react.CaseState(out_dir / "agent_state.json").data
     metadata = {"provider": provider, "model": model or f"{provider} default", "agent": "react",
                 "steps": len(state.get("steps", [])), "status": state.get("status"),

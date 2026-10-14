@@ -203,6 +203,19 @@ explain are investigated by a ReAct agent, once per failure signature
    checks, else it is sent back. Mapped to the report: DUT noncompliance, Reference-model
    mismatch, Test issue, Inconclusive; a hardware bug without a spec search is low confidence.
 
+**Test intent and specification invariants** (`agentic/spec_alignment.py`): the first message
+also carries, between `[TEST INTENT]` / `[/TEST INTENT]` and `[SPECIFICATION INVARIANTS]` /
+`[/SPECIFICATION INVARIANTS]`:
+- the test header (suite, required extensions, MARCH, boot mode), the coverpoints the test
+  covers, the failing check (the `<Suite>_cg_<coverpoint>_<bin>` label at the trap PC in the
+  board ELF) and its ACT test-plan entry (`testplans/priv/<suite>.yaml`: goal, description,
+  expectation, bins, normative rule ids; `testplans/<ext>.csv` for unprivileged instructions);
+- the normative rules the plan names (verbatim, spec index) and the knowledge-base rules for the
+  failure (`riscv_privileged_rules.md`, `act4_rules.md` first; this board's notes only).
+When the agent disassembles a different check than the first guess, that check's intent is added
+to the observation. The case files now keep the ACT `testplans/`; for older builds the ACT
+checkouts on the agent are used (the one at the run's ACT commit first).
+
 Each investigation is kept in `per_case/<case>/agent/agent_state.json` (every thought, tool
 call, observation, finding, sanity check) and `agent_final.json`.
 

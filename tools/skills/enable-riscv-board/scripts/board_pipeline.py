@@ -365,8 +365,56 @@ class Pipeline:
         decided = [l[len("decided "):] for l in r.stdout.splitlines() if l.startswith("decided ")]
         blockers = [l[len("blocker: "):] for l in r.stdout.splitlines() if l.startswith("blocker: ")]
         notes = [l[len("note: "):] for l in r.stdout.splitlines() if l.startswith("note: ")]
+        if out.is_file():
+            more = self.offline_decisions(out)
+            decided += more
+            notes += more
         self.record("decide", status="ok" if not blockers else "warn", fingerprint=fp, decided=len(decided),
                     notes=notes, decide_blockers=blockers)
+
+    SERIAL_PLACEHOLDER = "/dev/serial/by-id/SET-ON-THE-BENCH"
+
+    def offline_decisions(self, path: Path) -> list[str]:
+        """Decisions an offline build can take from what is already known; each becomes a
+        "confirm" note. The runner hart's PLIC contexts come from the device tree once decide has
+        chosen the hart (extract runs before that); the boot image format and the bench serial
+        device are not needed for firmware.bin and stay for the person installing the board."""
+        cov = yaml.safe_load(path.read_text())
+        reqs = cov["requirements"]
+
+        def is_open(rid: str) -> bool:
+            return (reqs.get(rid) or {}).get("status") in ("open", "choice_open", None)
+
+        def decide(rid: str, value: Any, source: str) -> None:
+            reqs.setdefault(rid, {}).update(status="decided", value=value, source=source, via="decide",
+                                            evidence_status="inferred")
+
+        notes = []
+        hart = (reqs.get("harts.runner") or {}).get("value")
+        facts_path = self.work / "facts.yaml"
+        if hart is not None and facts_path.is_file() and (is_open("interrupt.runner_m_context")
+                                                          or is_open("interrupt.runner_s_context")):
+            fact = ((yaml.safe_load(facts_path.read_text()) or {}).get("facts") or {}).get("interrupt.contexts")
+            contexts = (fact or {}).get("value") if isinstance(fact, dict) else fact
+            mine = [c for c in contexts or [] if str(c.get("hart")) == str(hart)]
+            by_mode = {str(c.get("mode", ""))[:1]: c["context"] for c in mine}
+            for mode, rid in (("M", "interrupt.runner_m_context"), ("S", "interrupt.runner_s_context")):
+                if mode in by_mode and is_open(rid):
+                    decide(rid, by_mode[mode], f"device tree PLIC contexts of runner hart {hart}")
+            if mine:
+                notes.append(f"plic: runner hart {hart} contexts M={by_mode.get('M')} S={by_mode.get('S')} "
+                             "(from the device tree)")
+        if is_open("boot.image_format") and not self.req.get("package"):
+            decide("boot.image_format", "not packaged in this run (firmware.bin only)",
+                   "board request: package is false")
+            notes.append("boot image: format unknown, packaging skipped; find the vendor packaging tool "
+                         "before installing the runner")
+        if is_open("bench.console_path"):
+            decide("bench.console_path", self.SERIAL_PLACEHOLDER, "placeholder until the bench is set up")
+            notes.append(f"bench: serial device is a placeholder ({self.SERIAL_PLACEHOLDER}); set the board's "
+                         "console UART device before a hardware run")
+        path.write_text(yaml.safe_dump(cov, sort_keys=False))
+        return notes
 
     def step_spec(self) -> None:
         sys.path.insert(0, str(SCRIPTS))
@@ -447,7 +495,9 @@ class Pipeline:
         accepted = set(self.req.get("accepted_layout_problems") or [])
         problems = [p for p in report["problems"] if not any(a in p for a in accepted)]
         # A proposed registration patch does not block the scratch build; it is applied there and listed for review.
-        blocking = [m for m in report["manual_steps"] if "registration.patch" not in m]
+        # Without packaging (package: false) the packaging function is not needed to build firmware.bin.
+        blocking = [m for m in report["manual_steps"] if "registration.patch" not in m
+                    and not ("board_package_image" in m and not self.req.get("package"))]
         self.record("runner_files", status="blocked" if problems or blocking else
                     ("warn" if report["manual_steps"] else "ok"),
                     fingerprint=fp, files=report["files"], problems=report["problems"],

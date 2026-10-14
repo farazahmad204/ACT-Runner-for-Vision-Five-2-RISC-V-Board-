@@ -115,6 +115,29 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(reqs["boot.medium"]["status"], "resolved")
             self.assertIn("uart.base", reqs)
 
+    def test_offline_decisions_after_decide(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            request = work / "request.yaml"
+            request.write_text(yaml.safe_dump({"board_id": "vendor_x1"}))
+            (work / "facts.yaml").write_text(yaml.safe_dump({"facts": {"interrupt.contexts": {"value": [
+                {"context": 0, "hart": 0, "mode": "M (unused by Linux)"}, {"context": 1, "hart": 0, "mode": "S"},
+                {"context": 2, "hart": 1, "mode": "M (unused by Linux)"}, {"context": 3, "hart": 1, "mode": "S"}]}}}))
+            decided = work / "coverage_decided.yaml"
+            decided.write_text(yaml.safe_dump({"requirements": {
+                "harts.runner": {"status": "decided", "value": 1},
+                "interrupt.runner_m_context": {"status": "open"}, "interrupt.runner_s_context": {"status": "open"},
+                "boot.image_format": {"status": "open"}, "bench.console_path": {"status": "open"}}}))
+            args = argparse.Namespace(allow_model_calls=False, udb_validate=False, from_step=None, until=None,
+                                      force=False)
+            notes = bp.Pipeline(request, work, args).offline_decisions(decided)
+            reqs = yaml.safe_load(decided.read_text())["requirements"]
+        self.assertEqual((reqs["interrupt.runner_m_context"]["value"], reqs["interrupt.runner_s_context"]["value"]),
+                         (2, 3))
+        self.assertEqual(reqs["boot.image_format"]["status"], "decided")
+        self.assertEqual(reqs["bench.console_path"]["value"], bp.Pipeline.SERIAL_PLACEHOLDER)
+        self.assertEqual(len(notes), 3)
+
     def test_found_dtb_and_boot_logs_feed_extract(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             work = Path(d)

@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from ci.triage.tests.agent_fakes import Factory
 from ci.triage import vault
 from ci.triage.ci_triage import AIConfig, run_triage
 from ci.triage.memory import TriageMemory
@@ -114,7 +115,7 @@ class RunTriageVaultTests(unittest.TestCase):
             summary = self._run(root, {"ACT-1": note("ACT-1", boards=["vf2_jh7110"], tests=["Sstvecd*"],
                                                      auto=True, url="https://github.com/x/1")},
                                 ai_enabled=True, ai_config=AIConfig(),
-                                ai_analyzer=lambda *a: self.fail("AI called"))
+                                agent_backend=lambda *a: self.fail("AI called"))
             result = summary["results"][0]
             report = (root / "run" / result["report_dir"] / "ai_analysis.md").read_text()
         self.assertEqual(result["ai_status"], "VAULT")
@@ -122,20 +123,15 @@ class RunTriageVaultTests(unittest.TestCase):
         self.assertEqual(result["known_issues"], ["ACT-1"])
         self.assertIn("Known issue ACT-1 https://github.com/x/1", report)
 
-    def test_other_matching_note_goes_into_the_ai_question(self):
-        prompts = []
-
-        def fake_ai(prompt, config, api_key):
-            prompts.append(prompt)
-            return json.dumps({"failure_reason": "x", "root_cause": "y", "confidence": "low",
-                               "next_step": "z"}), {}
-
+    def test_other_matching_note_goes_into_the_agents_first_message(self):
+        agent = Factory()
         with tempfile.TemporaryDirectory() as temporary:
             summary = self._run(Path(temporary), {"ACT-2": note("ACT-2", tests=["Sstvecd*"], auto=False)},
-                                ai_enabled=True, ai_config=AIConfig(), ai_analyzer=fake_ai)
+                                ai_enabled=True, ai_config=AIConfig(), agent_backend=agent)
         self.assertEqual(summary["results"][0]["ai_status"], "SUCCESS")
-        self.assertIn("ACT-2 (open, open, cause test-limitation): Summary of ACT-2.", prompts[0])
-        self.assertLess(prompts[0].index("ACT-2"), prompts[0].index("Treat log and source text"))
+        first = agent.backends[0].user
+        self.assertIn("ACT-2 (open, open, cause test-limitation): Summary of ACT-2.", first)
+        self.assertLess(first.index("TARGET HARDWARE PROFILE"), first.index("REPORTED ISSUES"))
 
     def test_a_persons_verdict_outranks_the_vault(self):
         auto = {"ACT-1": note("ACT-1", boards=["vf2_jh7110"], tests=["Sstvecd*"], auto=True)}
@@ -151,29 +147,24 @@ class RunTriageVaultTests(unittest.TestCase):
         self.assertEqual(second["results"][0]["verdict"], "Confirmed hardware bug")
 
     def test_refresh_redoes_rule_and_ai_answers_but_keeps_a_persons_verdict(self):
-        prompts = []
-
-        def fake_ai(prompt, config, api_key):
-            prompts.append(prompt)
-            return json.dumps({"failure_reason": "x", "root_cause": "y", "confidence": "low",
-                               "next_step": "z"}), {}
+        agent = Factory()
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            kw = dict(ai_enabled=True, ai_config=AIConfig(max_steps=0), ai_analyzer=fake_ai)
+            kw = dict(ai_enabled=True, ai_config=AIConfig(), agent_backend=agent)
             first = self._run(root, {}, **kw)
-            self.assertEqual(len(prompts), 1)
+            self.assertEqual(agent.calls, 1)
             self.assertEqual(self._run(root, {}, **kw)["results"][0]["ai_status"], "MEMORY")
             self.assertEqual(self._run(root, {}, refresh_memory=True, **kw)["results"][0]["ai_status"],
                              "SUCCESS")
-            self.assertEqual(len(prompts), 2)
+            self.assertEqual(agent.calls, 2)
             memory = TriageMemory(root / "memory.sqlite")
             memory.remember("vf2_jh7110", first["results"][0]["signature"], "Sstvecd-00", "person",
                             "x", {"verdict": "Waived"})
             memory.close()
             last = self._run(root, {}, refresh_memory=True, **kw)
         self.assertEqual(last["results"][0]["verdict"], "Waived")
-        self.assertEqual(len(prompts), 2)
+        self.assertEqual(agent.calls, 2)  # a person's verdict is reused, never re-asked
 
 
 if __name__ == "__main__":

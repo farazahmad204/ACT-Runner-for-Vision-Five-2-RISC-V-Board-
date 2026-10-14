@@ -7,7 +7,6 @@ from pathlib import Path
 
 from ci.triage.ci_triage import (
     AIConfig,
-    call_codex,
     classify,
     format_ai_report,
     extract_log_evidence,
@@ -15,6 +14,7 @@ from ci.triage.ci_triage import (
     run_triage,
 )
 from ci.triage.publish_triage import build_payload
+from ci.triage.tests.agent_fakes import FINAL, Factory
 
 
 class CITriageTests(unittest.TestCase):
@@ -118,11 +118,7 @@ class CITriageTests(unittest.TestCase):
             )
 
     def test_ai_is_optional_bounded_and_advisory(self):
-        calls = []
-
-        def fake_ai(prompt, config, api_key):
-            calls.append((prompt, config.model, api_key))
-            return "## Finding\nAdvisory only.", {"id": "resp_test", "model": config.model}
+        agent = Factory()
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -147,11 +143,11 @@ class CITriageTests(unittest.TestCase):
                 ai_config=AIConfig(model="test-model"),
                 api_key="secret-test-key",
                 max_ai_failures=1,
-                ai_analyzer=fake_ai,
+                agent_backend=agent,
                 memory_path=root / "memory.sqlite",
             )
 
-            self.assertEqual(len(calls), 1)
+            self.assertEqual(agent.calls, 1)
             self.assertEqual(summary["results"][0]["ai_status"], "SUCCESS")
             self.assertEqual(summary["results"][1]["ai_status"], "SKIPPED_LIMIT")
             serialized = (run_root / "triage/summary.json").read_text()
@@ -172,34 +168,6 @@ class CITriageTests(unittest.TestCase):
             "Next step: Mark as a known deviation."
         ))
         self.assertEqual(format_ai_report("plain text"), "plain text")
-
-    def test_codex_runs_read_only_with_the_answer_schema(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            log = Path(temporary) / "argv.json"
-            fake = Path(temporary) / "codex"
-            fake.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, sys\n"
-                "args = sys.argv[1:]\n"
-                f"open({str(log)!r}, 'w').write(json.dumps({{'args': args, 'stdin': sys.stdin.read()}}))\n"
-                "out = args[args.index('-o') + 1]\n"
-                "open(out, 'w').write(json.dumps({'failure_reason': 'x', 'root_cause': 'y',"
-                " 'confidence': 'low', 'next_step': 'z'}))\n"
-            )
-            fake.chmod(0o755)
-            text, meta = call_codex("evidence prompt", AIConfig(provider="codex", codex_bin=str(fake)))
-            seen = json.loads(log.read_text())
-        self.assertEqual(json.loads(text)["root_cause"], "y")
-        self.assertEqual(meta["provider"], "codex")
-        args = seen["args"]
-        self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
-        for flag in ("--ephemeral", "--ignore-user-config", "--output-schema"):
-            self.assertIn(flag, args)
-        disabled = {args[i + 1] for i, arg in enumerate(args) if arg == "--disable"}
-        self.assertTrue({"shell_tool", "unified_exec", "code_mode_host"} <= disabled)
-        self.assertNotIn("-m", args)  # blank model: Codex's default
-        self.assertTrue(seen["stdin"].startswith("You are the primary triage engineer"))
-        self.assertTrue(seen["stdin"].endswith("\n\nevidence prompt"))
 
     def test_skipped_cases_are_not_triaged(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -225,12 +193,7 @@ class CITriageTests(unittest.TestCase):
                           memory_path=root / "memory.sqlite", **kw)
 
     def test_same_failure_signature_costs_one_ai_call_and_memory_reuses_it(self):
-        calls = []
-
-        def fake_ai(prompt, config, api_key):
-            calls.append(prompt)
-            return json.dumps({"failure_reason": "x", "root_cause": "trap delegation differs",
-                               "confidence": "high", "next_step": "y"}), {}
+        agent = Factory()
 
         log = ('RVCP: Failure: "Mismatch in trap signature!"\n'
                "RVCP: Mismatching field: Vector+Mode+Status word (trap signature word 0)\n"
@@ -241,15 +204,15 @@ class CITriageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             first = self._run(root, cases, logs, ai_enabled=True, ai_config=AIConfig(),
-                              ai_analyzer=fake_ai)
-            self.assertEqual(len(calls), 1)  # three tests, one signature
+                              agent_backend=agent)
+            self.assertEqual(agent.calls, 1)  # three tests, one signature
             self.assertEqual({r["ai_status"] for r in first["results"]}, {"SUCCESS"})
             self.assertIn("shared by 3 tests", first["results"][2]["analysis_source"])
             report = (root / "run" / first["results"][1]["report_dir"] / "ai_analysis.md").read_text()
             self.assertIn("Root cause: trap delegation differs", report)
             second = self._run(root, cases, logs, ai_enabled=True, ai_config=AIConfig(),
-                               ai_analyzer=fake_ai)
-        self.assertEqual(len(calls), 1)  # nothing new to ask
+                               agent_backend=agent)
+        self.assertEqual(agent.calls, 1)  # nothing new to ask
         self.assertEqual(second["resolved"]["MEMORY"], 3)
         self.assertEqual(second["ai_calls"], 0)
 
@@ -265,7 +228,7 @@ class CITriageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             summary = self._run(root, cases, {"A": absent, "B": mask}, ai_enabled=True,
-                                ai_config=AIConfig(), ai_analyzer=lambda *a: self.fail("AI called"))
+                                ai_config=AIConfig(), agent_backend=lambda *a: self.fail("AI called"))
             reports = [(root / "run" / r["report_dir"] / "ai_analysis.md").read_text()
                        for r in summary["results"]]
         self.assertEqual(summary["resolved"]["RULE"], 2)

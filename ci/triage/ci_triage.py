@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 try:
     from .agent import (
-        CLASSES, attach_value_diff, check_answer, compact_prompt, disassembly, elf_index,
+        CLASSES, attach_value_diff, check_answer, disassembly, elf_index,
         failing_address, failure_signature, load_knowledge, rule_analysis, suggested_verdict,
     )
     from .context import (
@@ -27,23 +27,18 @@ try:
     )
     from .memory import TriageMemory
     from . import casefile, vault
-    from .investigate import ACTIONS, Toolbox, investigate, investigate_skills, summarize
-    from .skills import SkillContext
-    from .agent import TRIAGE_SYSTEM, analysis_instructions
     from . import spec as spec_index
     from . import validate_context
+    from .agentic import ci_bridge
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
         declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
     )
     from agent import (  # type: ignore[no-redef]
-        CLASSES, attach_value_diff, check_answer, compact_prompt, disassembly, elf_index,
+        CLASSES, attach_value_diff, check_answer, disassembly, elf_index,
         failing_address, failure_signature, load_knowledge, rule_analysis, suggested_verdict,
     )
     from memory import TriageMemory  # type: ignore[no-redef]
-    from investigate import ACTIONS, Toolbox, investigate, investigate_skills, summarize  # type: ignore[no-redef]
-    from skills import SkillContext  # type: ignore[no-redef]
-    from agent import TRIAGE_SYSTEM, analysis_instructions  # type: ignore[no-redef]
     import validate_context  # type: ignore[no-redef]
     import casefile  # type: ignore[no-redef]
     import spec as spec_index  # type: ignore[no-redef]
@@ -101,53 +96,12 @@ MAX_PROMPT_CHARS = 24000
 
 @dataclass(frozen=True)
 class AIConfig:
+    """The ReAct triage agent (agentic/): which model, and how many tool calls per failure."""
     model: str = ""  # blank: the provider's default model
-    provider: str = "openai"  # "openai" (Responses API key) or "codex" (logged-in Codex CLI)
-    endpoint: str = "https://api.openai.com/v1/responses"
-    timeout_seconds: int = 300
-    max_output_tokens: int = 1800
+    provider: str = "codex"  # codex (logged-in Codex CLI), openai or anthropic (API key + SDK)
     codex_bin: str = "codex"
-    max_steps: int = 3  # tool steps the AI may take to test its hypothesis (investigate.py)
-    mode: str = "single"  # "single": one evidence-rich question; "skills": skill-driven loop
+    max_steps: int = 12  # tool calls per failure signature before the answer is forced
 
-
-# The AI answers in this shape; format_ai_report turns it into the portal's AI analysis cell.
-AI_ANSWER_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["hypothesis", "hypotheses", "action", "argument", "evidence_ids", "classification", "failure_reason",
-                 "root_cause", "confidence", "next_step", "spec_version", "spec_quote"],
-    "properties": {
-        # One investigation step (investigate.py): a tool to run next, or "answer".
-        "hypothesis": {"type": "string"},
-        "action": {"type": "string", "enum": ACTIONS},
-        "argument": {"type": "string"},
-        # Skill mode: the evidence ids (log.1, spec.2...) the answer relies on; [] otherwise.
-        "evidence_ids": {"type": "array", "items": {"type": "string"}},
-        # Skill mode: the competing hypotheses and the evidence for and against each; [] otherwise.
-        "hypotheses": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False,
-            "required": ["text", "status", "supported_by", "contradicted_by"],
-            "properties": {
-                "text": {"type": "string"},
-                "status": {"type": "string", "enum": ["open", "confirmed", "ruled_out"]},
-                "supported_by": {"type": "array", "items": {"type": "string"}},
-                "contradicted_by": {"type": "array", "items": {"type": "string"}},
-            }}},
-        "classification": {"type": "string", "enum": [
-            "DUT noncompliance", "Unsupported feature", "Test issue", "Firmware issue",
-            "Reference-model mismatch", "Implementation-defined behavior", "Environment issue",
-            "Inconclusive"]},
-        "failure_reason": {"type": "string"},
-        "root_cause": {"type": "string"},
-        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-        "next_step": {"type": "string"},
-        # The passage the answer relies on: a version id from the question, and words copied
-        # from it. The agent checks the quote is in that version. Empty when none applies.
-        "spec_version": {"type": "string"},
-        "spec_quote": {"type": "string"},
-    },
-}
 
 # Facts the evidence cannot show but a root cause depends on. Only verified facts belong here.
 BOARD_CONTEXT = {
@@ -437,141 +391,6 @@ def format_ai_report(text: str) -> str:
     return "\n".join(lines) or text.strip()
 
 
-def extract_response_text(response: dict[str, Any]) -> str:
-    direct = response.get("output_text")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-    chunks: list[str] = []
-    for item in response.get("output", []):
-        if not isinstance(item, dict):
-            continue
-        for content in item.get("content", []):
-            if isinstance(content, dict) and content.get("type") in {"output_text", "text"}:
-                text = content.get("text")
-                if isinstance(text, str):
-                    chunks.append(text)
-    return "\n".join(chunks).strip()
-
-
-def call_openai(prompt: str, config: AIConfig, api_key: str) -> tuple[str, dict[str, Any]]:
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY is required when AI triage is enabled")
-    body = json.dumps(
-        {
-            "model": config.model or "gpt-5",
-            "instructions": TRIAGE_SYSTEM,
-            "input": prompt,
-            "max_output_tokens": config.max_output_tokens,
-            "store": False,
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "act_failure_analysis",
-                    "schema": AI_ANSWER_SCHEMA,
-                    "strict": True,
-                }
-            },
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        config.endpoint,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    last_error: Exception | None = None
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
-                decoded = json.loads(response.read().decode("utf-8"))
-            text = extract_response_text(decoded)
-            if not text:
-                raise ValueError("AI response contained no output text")
-            return text, decoded
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
-            last_error = exc
-            if attempt < 2:
-                time.sleep(2**attempt)
-    raise RuntimeError(f"AI analysis failed after 3 attempts: {last_error}")
-
-
-# Codex features that give the model tools (shell, code execution, browser, plugins...). All are
-# turned off: the read-only sandbox still lets commands read any file, and the evidence can come
-# from a user's own ELF (Run ELF), so the model must only answer from the prompt.
-CODEX_DISABLED_FEATURES = (
-    "shell_tool", "unified_exec", "code_mode_host", "browser_use", "browser_use_external",
-    "computer_use", "in_app_browser", "apps", "plugins", "remote_plugin", "multi_agent",
-    "image_generation", "hooks", "skill_mcp_dependency_install", "skill_search", "tool_suggest",
-    "goals",
-)
-
-
-def call_codex(prompt: str, config: AIConfig, api_key: str = "") -> tuple[str, dict[str, Any]]:
-    """Ask the Codex CLI (logged in with a ChatGPT account) for one failure analysis.
-
-    Codex runs with every tool disabled (it can only read the prompt and answer), read-only in
-    an empty directory, without the user's config, rules or saved sessions; the evidence goes in
-    on stdin and the JSON answer comes back in a file.
-    """
-    codex = shutil.which(config.codex_bin)
-    if not codex:
-        raise ValueError(f"Codex CLI not found: {config.codex_bin}")
-    last_error = ""
-    for attempt in range(2):
-        with tempfile.TemporaryDirectory(prefix="act-triage-") as temporary:
-            root = Path(temporary)
-            work = root / "work"
-            work.mkdir()
-            schema = root / "schema.json"
-            schema.write_text(json.dumps(AI_ANSWER_SCHEMA), encoding="utf-8")
-            answer = root / "answer.json"
-            command = [
-                codex, "exec", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
-                "--ignore-rules", "--sandbox", "read-only", "--color", "never",
-                "-C", str(work), "--output-schema", str(schema), "-o", str(answer),
-                "-c", 'web_search="disabled"',
-            ]
-            for feature in CODEX_DISABLED_FEATURES:
-                command += ["--disable", feature]
-            if config.model:
-                command += ["-m", config.model]
-            command.append("-")
-            try:
-                process = subprocess.run(
-                    command, input=f"{TRIAGE_SYSTEM}\n\n{prompt}", text=True, capture_output=True,
-                    timeout=config.timeout_seconds, cwd=work,
-                )
-            except subprocess.TimeoutExpired:
-                last_error = f"timed out after {config.timeout_seconds} s"
-                continue
-            text = answer.read_text(encoding="utf-8").strip() if answer.is_file() else ""
-            if process.returncode == 0 and text:
-                return text, {"provider": "codex", "model": config.model or "codex default"}
-            last_error = f"rc={process.returncode}: {(process.stderr or '').strip()[-400:]}"
-        if attempt == 0:
-            time.sleep(5)
-    raise RuntimeError(f"Codex analysis failed: {last_error}")
-
-
-AI_PROVIDERS: dict[str, Callable[[str, AIConfig, str], tuple[str, dict[str, Any]]]] = {
-    "openai": call_openai,
-    "codex": call_codex,
-}
-
-
-def parse_answer(text: str) -> dict[str, Any]:
-    try:
-        answer = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        answer = None
-    if not isinstance(answer, dict):
-        return {"root_cause": str(text).strip()}
-    return answer
-
-
 def analysis_report(analysis: dict[str, Any], source: str) -> str:
     """The portal's AI analysis cell: labelled lines plus where the analysis came from."""
     body = format_ai_report(json.dumps(analysis))
@@ -680,14 +499,6 @@ def stale(stored: dict[str, Any], current: dict[str, Any]) -> bool:
                for k in ("act_commit", "sail_version", "spec_versions"))
 
 
-def skill_header(lead: dict[str, Any], names: list[str], knowledge: dict[str, Any]) -> str:
-    """The opening of a skill-mode question: what failed where, and the board's verified facts."""
-    return (f"A RISC-V compliance test failed on real hardware (board {lead.get('board')}). "
-            f"{len(names)} test(s) fail the same way: {', '.join(names[:6])}"
-            + (" ..." if len(names) > 6 else "") + ".\n"
-            + "Board facts (verified): " + " ".join(knowledge.get("facts") or ["none recorded"])[:900])
-
-
 def run_triage(
     run_root: Path,
     state_root: Path,
@@ -697,7 +508,7 @@ def run_triage(
     ai_config: AIConfig | None = None,
     api_key: str = "",
     max_ai_failures: int = 20,
-    ai_analyzer: Callable[[str, AIConfig, str], tuple[str, dict[str, Any]]] | None = None,
+    agent_backend: Callable[[Any], Any] | None = None,
     memory_path: str | Path | None = None,
     refresh_memory: bool = False,
     blind: bool = False,
@@ -777,9 +588,9 @@ def run_triage(
         records.append(record)
 
     ai_calls = 0
-    board_isa = declared_isa(knowledge) if pending else ""
     board_versions = {role: spec_index.label(vid)
                       for role, vid in (knowledge.get("spec_versions") or {}).items() if role != "source"}
+    profile = ci_bridge.board_profile(run_root, board) if pending and ai_enabled else {}
     for signature, members in pending.items():
         if not ai_enabled:
             continue
@@ -789,92 +600,19 @@ def run_triage(
             continue
         if ai_config is None:
             raise ValueError("ai_config is required when AI triage is enabled")
-        analyzer = ai_analyzer or AI_PROVIDERS[ai_config.provider]
         lead = members[0]["evidence"]
-        names = [m["evidence"]["case"] for m in members]
-        elf = elfs.get(str(members[0]["case"].get("suite") or lead["case"]))
-        lead_ex = lead.get("extracted", {})
-        address = failing_address(lead_ex)
-        label, snippet = test_source(elf, address, str(lead_ex.get("damo_assert", "")),
-                                     str(members[0]["case"].get("suite", "")))
-        terms = query_terms(lead)
-        spec, spec_tag = spec_passages(terms)
-        known_ids = {note["id"] for note in members[0].get("known_issues") or []}
-        case_file = members[0].get("casefile") or {}
-        code = (case_file.get("intent") or {}).get("code", "")
-        # Step 5: what the spec versions this board implements say about this failure.
-        rule_ids = re.findall(r"norm:([A-Za-z0-9_]+)", "\n".join(
-            [code, str(lead_ex.get("damo_assert", ""))] + list(lead_ex.get("evidence_lines", []))))
-        spec_found = spec_index.ground(
-            spec_index.failure_terms(lead_ex, lead.get("value_diff") or {}, case_file, lead["case"]),
-            knowledge, list(dict.fromkeys(rule_ids)),
-            hypervisor=bool(re.search(r"(?:^|[A-Za-z])H(?:Sm|S)?[_-]|^Hypervisor|^Sv\d+x4|^Sh[a-z]",
-                                      lead["case"])))
-        grounding = {
-            "case": case_file,
-            "spec_versions": spec_index.render(spec_found),
-            "board_versions": spec_found.get("versions", {}),
-            "source_label": label,
-            "source": snippet,
-            "norms": case_file.get("norms") or norms(code or snippet, str(lead_ex.get("damo_assert", "")),
-                           "\n".join(lead_ex.get("evidence_lines", []))),
-            "spec": spec,
-            "spec_tag": spec_tag,
-            "isa": board_isa,
-            "known_issues": vault.context_lines(members[0].get("known_issues") or []),
-            "issues": related_issues(lead["case"], issue_terms(lead), exclude=known_ids),
-            "environment": (members[0].get("context") or {}).get("items", []),
-        }
-        related = memory.related(board, lead["deterministic_category"], signature)
-        prompt = compact_prompt(
-            lead, names, knowledge,
-            [] if snippet or case_file.get("instruction") else disassembly(elf, address),
-            related, grounding,
-        )
         ai_calls += 1
-        toolbox = Toolbox(run_root, lead["case"], elf, knowledge,
-                          hypervisor=bool(spec_found.get("versions", {}).get("hypervisor")))
-        ask = lambda question: analyzer(question, ai_config, api_key)  # noqa: E731
-        evidence_ids = None
+        out_dir = per_case / safe_name(lead["case"]) / "agent"
         try:
-            if ai_config.mode == "skills":
-                header = skill_header(lead, names, knowledge)
-                text, raw_response, steps, found = investigate_skills(
-                    header, SkillContext(lead, case_file, grounding, knowledge, related,
-                                         (members[0].get("context") or {}).get("items", [])), ask, toolbox,
-                    max(0, ai_config.max_steps), analysis_instructions())
-                evidence_ids = {key for key in found if not key.startswith("note.")}
-                prompt = header  # for the size metadata
-            else:
-                text, raw_response, steps = investigate(prompt, ask, toolbox, max(0, ai_config.max_steps))
-                found = {}
-            answer = parse_answer(text)
-            for key in ("action", "argument", "hypothesis"):
-                answer.pop(key, None)
-            if steps:
-                answer["investigation"] = [{k: step[k] for k in ("step", "hypothesis", "tool", "argument")}
-                                           for step in steps]
-            answer = check_answer(answer, lead, spec_found.get("versions", {}),
-                                  has_instruction=bool(case_file.get("instruction")), evidence_ids=evidence_ids)
-            if evidence_ids is not None:
-                answer["evidence"] = [{"id": key, "text": found[key][:600]}
-                                      for key in answer.get("evidence_ids") or []]
-                answer["hypotheses"] = summarize(answer.get("hypotheses"))
-            else:
-                answer.pop("evidence_ids", None)
-                answer.pop("hypotheses", None)
-            metadata = {key: raw_response.get(key) for key in
-                        ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
-            metadata.update(prompt_chars=len(prompt), cluster_size=len(members), steps=steps,
-                            mode=ai_config.mode,
-                            ai_requests=len(steps) + 1,
-                            grounding=[k for k in ("source", "norms", "spec", "spec_versions", "isa", "known_issues",
-                                                 "issues")
-                                       if grounding.get(k)]
-                            + [f"case:{k}" for k in case_file if k != "act_revision"])
-            source = "AI" + (f" after {len(steps)} tool step(s)" if steps else "") + (f" (one analysis shared by {len(members)} tests with this failure signature)"
-                             if len(members) > 1 else "")
+            # The ReAct agent investigates the signature's first test; the others share its answer.
+            answer, metadata = ci_bridge.analyze(
+                run_root, members[0], knowledge, profile, out_dir, ai_config.provider, ai_config.model,
+                max(1, ai_config.max_steps), ai_config.codex_bin, backend_factory=agent_backend)
             answer["revisions"] = (members[0].get("context") or {}).get("revisions", {})
+            metadata.update(cluster_size=len(members))
+            source = (f"AI agent ({metadata['steps']} steps)"
+                      + (f", one analysis shared by {len(members)} tests with this failure signature"
+                         if len(members) > 1 else ""))
             for member in members:
                 member.update(analysis=answer, source=source, ai_status="SUCCESS", metadata=metadata)
                 memory.remember(board, signature, member["evidence"]["case"], "ai",

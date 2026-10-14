@@ -1,5 +1,7 @@
 # StarFive VisionFive 2. Only measured or documented facts.
 board: vf2_jh7110
+# Fixed silicon (a commercial SoC): fixes are workarounds or vendor errata, never RTL.
+core_type: hard_macro
 facts:
   - "StarFive JH7110 with SiFive U74 cores (RV64GC); the U74 has no hypervisor extension."
 act_config: config/cores/sifive_u74/visionfive2-rv64gc.yaml

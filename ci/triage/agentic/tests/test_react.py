@@ -23,7 +23,8 @@ RVCP-SUMMARY: TEST FAILED - Test File "x.S"
 FINAL = {"analysis_status": "COMPLETED", "failure_classification": "Test_Suite_Error",
          "symptom_isolation": "lw at 0x80000a3c: expected cause 4, got 5 (steps 1-2)",
          "identified_root_cause": "The test assumes misaligned before access fault; the spec allows either.",
-         "reproduction_steps_or_fix": "Relax the test's expected cause."}
+         "reproduction_steps_or_fix": "Relax the test's expected cause.", "tier1_root_cause": {"invariant": "", "instruction": "", "pc": "", "sail_step": "", "divergence": "", "subcomponent": ""},
+         "tier2_remediation": {"fix_kind": "test", "target": "x.S", "directive": "relax the check"}}
 
 
 class Scripted:

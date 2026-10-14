@@ -38,7 +38,7 @@ FINAL_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": ["analysis_status", "failure_classification", "symptom_isolation", "identified_root_cause",
-                 "reproduction_steps_or_fix"],
+                 "reproduction_steps_or_fix", "tier1_root_cause", "tier2_remediation"],
     "properties": {
         "analysis_status": {"type": "string", "enum": ["COMPLETED"]},
         "failure_classification": {"type": "string", "enum": list(CLASSIFICATIONS)},
@@ -47,8 +47,39 @@ FINAL_SCHEMA = {
         "identified_root_cause": {"type": "string", "description": "Why it differs, citing tool evidence."},
         "reproduction_steps_or_fix": {"type": "string", "description": "How to reproduce it, or what to change "
                                                                        "and who should change it."},
+        "tier1_root_cause": {
+            "type": "object", "additionalProperties": False,
+            "description": "Where the run diverged, as precisely as the evidence allows; unknown fields empty.",
+            "required": ["invariant", "instruction", "pc", "sail_step", "divergence", "subcomponent"],
+            "properties": {
+                "invariant": {"type": "string", "description": "The rule violated or disputed (norm id or quote)."},
+                "instruction": {"type": "string", "description": "The diverging instruction (disassembly)."},
+                "pc": {"type": "string", "description": "Its address in the board ELF (0x...)."},
+                "sail_step": {"type": "string", "description": "Sail's instruction step at that point (the "
+                                                                "board has no cycle trace), or empty."},
+                "divergence": {"type": "string", "description": "Board behavior vs Sail/expected, with values."},
+                "subcomponent": {"type": "string", "description": "Inferred unit: trap/exception unit, CSR file, "
+                                                                  "LSU, MMU/PTW, PMP, decoder, interrupt "
+                                                                  "controller, runner, ACT macro, Sail config..."},
+            },
+        },
+        "tier2_remediation": {
+            "type": "object", "additionalProperties": False,
+            "description": "The fix, within what the Target Hardware Profile allows.",
+            "required": ["fix_kind", "target", "directive"],
+            "properties": {
+                "fix_kind": {"type": "string", "enum": ["rtl", "firmware", "bootloader", "runner", "compiler",
+                                                        "test", "reference_config", "board_config", "erratum",
+                                                        "none"]},
+                "target": {"type": "string", "description": "The file, module, config key, flag or document to "
+                                                            "change (an HDL module file for rtl)."},
+                "directive": {"type": "string", "description": "The concrete change, specific enough to act on."},
+            },
+        },
     },
 }
+HARD_FIX_KINDS = ["firmware", "bootloader", "runner", "compiler", "test", "reference_config", "board_config",
+                  "erratum", "none"]
 SUBMIT = {"name": "submit_analysis",
           "description": "Finish the investigation with the final classification. Call only when the evidence "
                          "isolates one classification, or with Inconclusive when it cannot.",
@@ -89,6 +120,19 @@ extension (UDB_Config_Mismatch). Never a DUT_RTL_Bug.
 delegation, known priority behavior, known ACT issues), check the failure against them before calling it new.
 5. Decide. Sail, ACT and the board can each be wrong. A difference from Sail is a DUT_RTL_Bug only if the \
 specification version the board implements requires Sail's behavior and no sanity check or erratum explains it.
+
+Two goals, both in the final answer:
+- Tier 1, root cause (tier1_root_cause): the exact point of divergence - the invariant (norm id or quoted \
+rule), the instruction and its PC in the board ELF, Sail's instruction step there (from tool_query_sail_trace; \
+the board has no cycle trace, so do not invent cycles), what the board did versus what was expected, with \
+values, and the hardware or software sub-component responsible (inferred from the evidence; say so).
+- Tier 2, remediation (tier2_remediation), bounded by the profile's Core type:
+  - hard macro (fixed silicon, e.g. a SiFive U74 in the JH7110) or unknown: never RTL. Give a firmware, \
+bootloader or runner workaround, a compiler/-march change, a test or reference/board configuration change, or a \
+vendor erratum to file, naming the exact file, config key or flag.
+  - soft core (open RTL on an FPGA, with an RTL source): for a DUT_RTL_Bug, name the HDL module file and the \
+logic to change; otherwise the same software/config fixes.
+  A remediation outside these bounds is rejected.
 
 How you work (ReAct):
 - Before every tool call, reason out loud in a few sentences: what the evidence shows so far, your competing \
@@ -340,10 +384,31 @@ class CodexBackend:
         pass  # the history comes from the case state
 
 
-def validate_final(payload: dict, sanity: list[dict] | None = None) -> list[str]:
+def validate_final(payload: dict, sanity: list[dict] | None = None, profile: dict | None = None) -> list[str]:
     """Problems with a final payload against FINAL_SCHEMA (empty when it is valid); with the
-    recorded sanity checks, a classification none of them allows is a problem too."""
+    recorded sanity checks, a classification none of them allows is a problem too; with the
+    profile, a remediation its core type does not allow (RTL on fixed silicon)."""
     problems = []
+    if isinstance(payload, dict):
+        tier1, tier2 = payload.get("tier1_root_cause"), payload.get("tier2_remediation")
+        if not isinstance(tier1, dict) or set(tier1) != set(FINAL_SCHEMA["properties"]["tier1_root_cause"]["required"]):
+            problems.append("tier1_root_cause must have invariant, instruction, pc, sail_step, divergence, "
+                            "subcomponent (strings; empty if unknown)")
+        if not isinstance(tier2, dict) or set(tier2) != {"fix_kind", "target", "directive"}:
+            problems.append("tier2_remediation must have fix_kind, target, directive")
+        else:
+            kind = tier2.get("fix_kind")
+            core = (profile or {}).get("core_type") or "unknown"
+            soft = core == "soft_core" and (profile or {}).get("rtl_source")
+            if kind not in FINAL_SCHEMA["properties"]["tier2_remediation"]["properties"]["fix_kind"]["enum"]:
+                problems.append(f"tier2_remediation.fix_kind {kind!r} is not one of the allowed kinds")
+            elif kind == "rtl" and not soft:
+                problems.append(f"an RTL fix is not possible on this core (core type {core}): give a "
+                                f"{', '.join(HARD_FIX_KINDS[:-1])} change instead")
+            elif kind == "rtl" and not re.search(r"\.(s?v|vhdl?|scala|sv|py)\b|/", str(tier2.get("target", ""))):
+                problems.append("an RTL fix must name the HDL module file in tier2_remediation.target")
+            if kind != "none" and not str(tier2.get("directive", "")).strip():
+                problems.append("tier2_remediation.directive must say what to change")
     if isinstance(payload, dict) and sanity:
         klass = payload.get("failure_classification")
         for item in sanity:
@@ -356,6 +421,8 @@ def validate_final(payload: dict, sanity: list[dict] | None = None) -> list[str]
     if extra:
         problems.append("unexpected keys: " + ", ".join(extra))
     for key, prop in FINAL_SCHEMA["properties"].items():
+        if prop["type"] == "object":
+            continue  # checked above
         value = payload.get(key)
         if not isinstance(value, str) or not value.strip():
             problems.append(f"{key} must be a non-empty string")
@@ -421,7 +488,7 @@ def run_react(case: str, inputs: dict, out_dir: Path, backend_name: str = "codex
             continue
         for call in turn.calls:
             if call.name == "submit_analysis":
-                problems = validate_final(call.arguments, state.data.get("sanity"))
+                problems = validate_final(call.arguments, state.data.get("sanity"), profile)
                 if not problems:
                     final = call.arguments
                     state.record(turn.thought, call.name, call.arguments, {"ok": True}, "final analysis accepted")
@@ -473,7 +540,9 @@ def run_react(case: str, inputs: dict, out_dir: Path, backend_name: str = "codex
                  "symptom_isolation": "; ".join(f["text"] for f in state.data["findings"]) or
                                       "No finding was established within the step budget.",
                  "identified_root_cause": f"The agent did not reach a conclusion within {max_steps} tool calls.",
-                 "reproduction_steps_or_fix": f"Review {state.path} and rerun with a larger --max-steps."}
+                 "reproduction_steps_or_fix": f"Review {state.path} and rerun with a larger --max-steps.",
+                 "tier1_root_cause": {k: "" for k in FINAL_SCHEMA["properties"]["tier1_root_cause"]["required"]},
+                 "tier2_remediation": {"fix_kind": "none", "target": "", "directive": ""}}
         state.finish(final, status="budget_exhausted")
     else:
         state.finish(final)

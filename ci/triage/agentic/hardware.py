@@ -61,6 +61,10 @@ class HardwareProfile:
     extensions: list[str] = field(default_factory=list)
     mmu_modes: list[str] = field(default_factory=list)
     priv_version: str | None = None
+    # hard_macro: fixed silicon (fixes are firmware/bootloader/compiler workarounds or errata);
+    # soft_core: open RTL on an FPGA (rtl_source says where the HDL is); unknown: treat as hard.
+    core_type: str | None = None
+    rtl_source: str | None = None
     spec_versions: dict[str, str] = field(default_factory=dict)
     facts: list[str] = field(default_factory=list)
     sources: dict[str, str] = field(default_factory=dict)
@@ -77,7 +81,7 @@ class HardwareProfile:
 
     def merge(self, other: "HardwareProfile") -> None:
         for name in ("board_name", "core_name", "xlen", "implemented_isa", "mmu_type", "privilege_modes",
-                     "soc", "extensions", "mmu_modes", "priv_version", "spec_versions"):
+                     "soc", "extensions", "mmu_modes", "priv_version", "spec_versions", "core_type", "rtl_source"):
             self.set(name, getattr(other, name), other.sources.get(name, "merged"))
         self.facts += [f for f in other.facts if f not in self.facts]
 
@@ -174,6 +178,8 @@ def _from_board_knowledge(data: dict[str, Any], src: str) -> HardwareProfile:
     p.set("spec_versions", {k: v for k, v in (data.get("spec_versions") or {}).items() if k != "source"},
           f"{src}: spec_versions")
     p.facts = [str(f) for f in data.get("facts") or []]
+    p.set("core_type", data.get("core_type"), f"{src}: core_type")
+    p.set("rtl_source", data.get("rtl_source"), f"{src}: rtl_source")
     # The measured spec version beats a declared one (an ACT config may declare a newer one so
     # that tests are generated, e.g. the Megrez: priv 1.11 implemented, 1.12 declared).
     priv = re.match(r"^priv-(\d+\.\d+)$", str((data.get("spec_versions") or {}).get("priv") or ""))
@@ -288,6 +294,13 @@ def get_hardware_context_string(profile: dict[str, Any]) -> str:
     if profile.get("mmu_modes") and len(profile["mmu_modes"]) > 1:
         mmu += f" (supports {', '.join(profile['mmu_modes'])})"
     lines.append(f"- Address translation: {mmu}")
+    core_type = profile.get("core_type") or "unknown"
+    lines.append("- Core type: " + {
+        "hard_macro": "hard macro (fixed silicon): fixes are firmware, bootloader, runner, compiler, test or "
+                      "configuration changes, or a vendor erratum; never RTL",
+        "soft_core": f"soft core (open RTL{', ' + profile['rtl_source'] if profile.get('rtl_source') else ''}): "
+                     "a hardware bug can be fixed in its HDL",
+    }.get(core_type, "unknown: treat as fixed silicon (no RTL changes)"))
     if profile.get("spec_versions"):
         lines.append("- Spec versions implemented: " + ", ".join(f"{k} {v}" for k, v in profile["spec_versions"].items()))
     exts = set(profile.get("extensions") or [])

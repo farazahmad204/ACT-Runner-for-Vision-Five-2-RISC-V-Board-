@@ -203,6 +203,15 @@ explain are investigated by a ReAct agent, once per failure signature
    checks, else it is sent back. Mapped to the report: DUT noncompliance, Reference-model
    mismatch, Test issue, Inconclusive; a hardware bug without a spec search is low confidence.
 
+**Two tiers in every answer.** `tier1_root_cause`: the invariant, the diverging instruction and
+its PC, Sail's instruction step there (the board has no cycle trace), board vs expected with
+values, and the inferred sub-component. `tier2_remediation` (`fix_kind`, `target`, `directive`)
+is bounded by the profile's `core_type` (`board_knowledge/<board>.yaml`): on a `hard_macro`
+(the three boards: fixed silicon) or an unknown core an RTL fix is rejected and the agent must
+give a firmware, bootloader, runner, compiler, test, reference/board configuration change or a
+vendor erratum; on a `soft_core` with an `rtl_source`, an RTL fix must name the HDL module file.
+The portal's next step shows `[fix_kind: target] directive`.
+
 **Test intent and specification invariants** (`agentic/spec_alignment.py`): the first message
 also carries, between `[TEST INTENT]` / `[/TEST INTENT]` and `[SPECIFICATION INVARIANTS]` /
 `[/SPECIFICATION INVARIANTS]`:

@@ -160,12 +160,18 @@ def to_answer(final: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         confidence = "medium"
     if state.get("status") == "budget_exhausted":
         notes.append("no conclusion within the step budget")
+    tier2 = final.get("tier2_remediation") or {}
+    fix = tier2.get("directive") or final.get("reproduction_steps_or_fix", "")
+    if tier2.get("fix_kind") and tier2.get("fix_kind") != "none":
+        fix = f"[{tier2['fix_kind']}{': ' + tier2['target'] if tier2.get('target') else ''}] {fix}"
     answer = {
         "classification": klass,
         "agent_classification": final.get("failure_classification"),
         "failure_reason": final.get("symptom_isolation", ""),
         "root_cause": final.get("identified_root_cause", ""),
-        "next_step": final.get("reproduction_steps_or_fix", ""),
+        "next_step": fix,
+        "tier1_root_cause": final.get("tier1_root_cause") or {},
+        "tier2_remediation": tier2,
         "confidence": confidence,
         "investigation": [{"step": s["step"], "hypothesis": (s.get("thought") or "")[:300], "tool": s["tool"],
                            "argument": str(s.get("arguments"))[:200]} for s in steps],

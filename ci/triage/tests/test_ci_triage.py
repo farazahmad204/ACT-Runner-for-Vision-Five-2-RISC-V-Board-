@@ -216,6 +216,23 @@ class CITriageTests(unittest.TestCase):
         self.assertEqual(second["resolved"]["MEMORY"], 3)
         self.assertEqual(second["ai_calls"], 0)
 
+    def test_a_quota_refusal_stops_the_ai_for_the_rest_of_the_run(self):
+        from ci.triage.agentic import react
+        calls = []
+
+        def refuse(state):
+            calls.append(1)
+            raise react.QuotaExhausted("You've hit your usage limit ... try again at 3:12 AM.")
+
+        log = 'RVCP: Failure: "x{n}"\nRVCP: XCAUSE: 0x{n}\n'
+        cases = [{"test_name": f"Q{n}", "status": "FAIL", "uart_log": f"Q{n}.log"} for n in (2, 3, 5)]
+        with tempfile.TemporaryDirectory() as temporary:
+            summary = self._run(Path(temporary), cases, {f"Q{n}": log.replace("{n}", str(n)) for n in (2, 3, 5)},
+                                ai_enabled=True, ai_config=AIConfig(), agent_backend=refuse)
+        self.assertEqual(len(calls), 1)  # asked once, then stopped
+        self.assertEqual(summary["resolved"]["SKIPPED_QUOTA"], 3)
+        self.assertIn("retry at 3:12 AM", summary["ai_quota"])
+
     def test_megrez_board_rules_need_no_ai(self):
         absent = ("[TEST] HENV-01: henvcfg basic read/write\n"
                   "  [ERROR] UNEXPECTED TRAP in M-mode !!!\n  [ERROR] mcause  = 0x2\n"

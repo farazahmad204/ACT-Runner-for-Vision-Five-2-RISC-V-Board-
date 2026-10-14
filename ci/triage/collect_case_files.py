@@ -129,6 +129,11 @@ def collect(run_root: Path, state_root: Path, board: str, act_root: Path,
         for path in config.iterdir():
             if path.is_file() and path.suffix in {".h", ".json", ".yaml", ".yml", ".ld", ".md"}:
                 copy(path, act_out / "config" / path.name)
+    plans = act_root / "testplans"
+    if plans.is_dir():  # what each coverpoint checks (spec_alignment reads it)
+        for path in plans.rglob("*"):
+            if path.is_file() and path.suffix in {".yaml", ".csv", ".json"}:
+                copy(path, act_out / "testplans" / path.relative_to(plans))
     env = act_root / "tests" / "env"
     if env.is_dir():
         for path in env.glob("*.h"):

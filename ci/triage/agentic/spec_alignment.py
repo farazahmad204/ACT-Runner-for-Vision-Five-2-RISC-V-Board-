@@ -146,7 +146,9 @@ def extract_test_intent(test_source_path: str, failing_label: str | None = None,
     roots = testplan_roots(run_root)
     wanted = [target] if target else covered[:6]
     plans = []
-    for root in roots[:1]:
+    for root in roots:  # the run's own plans first; an older checkout may lack a suite
+        if plans:
+            break
         index = _priv_index(str(root))
         for cp in wanted:
             entry = index.get(cp)

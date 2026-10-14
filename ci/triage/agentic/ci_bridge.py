@@ -64,21 +64,18 @@ def case_inputs(run_root: Path, record: dict[str, Any], profile: dict[str, Any])
     }
 
 
-def install_hooks(run_root: Path, case: str, knowledge: dict[str, Any], profile: dict[str, Any]) -> None:
-    """Point the tools at this case: Sail is run on demand into the trace path, a board PC is
-    mapped to the Sail ELF, and spec searches use the board's own spec versions."""
-    folder = casefile.case_dir(run_root, case)
-    board_elf, sig_elf = folder / "test.elf", folder / "test.sig.elf"
-    config = run_root / "act" / "config" / "sail.json"
-    version = re.search(r"sail_version=(\S+)", casefile.act_revision(run_root))
-
+def set_hooks(board_elf: Path | None, sig_elf: Path | None, sail_config: Path | None, sail_version: str,
+              knowledge: dict[str, Any], profile: dict[str, Any], roots: list[Path]) -> None:
+    """Point the tools at one failure's files: Sail runs on demand (sig_elf with sail_config) into
+    the trace path the agent asks for, a board PC is mapped to the Sail ELF by symbol, spec
+    searches use the board's spec versions, and tools may read only under `roots`."""
     def generate(trace: Path) -> bool:
-        binary = sail_trace.sail_binary(version.group(1) if version else "")
-        if not (binary and sig_elf.is_file() and config.is_file()):
+        binary = sail_trace.sail_binary(sail_version)
+        if not (binary and sig_elf and sig_elf.is_file() and sail_config and sail_config.is_file()):
             return False
         trace.parent.mkdir(parents=True, exist_ok=True)
         try:
-            subprocess.run([binary, "--config", str(config), "--inst-limit", str(sail_trace.INST_LIMIT),
+            subprocess.run([binary, "--config", str(sail_config), "--inst-limit", str(sail_trace.INST_LIMIT),
                             *sail_trace.TRACE_FLAGS, "--trace-output", str(trace), str(sig_elf)],
                            capture_output=True, timeout=int(os.environ.get("TRIAGE_SAIL_TIMEOUT", "180")))
         except (OSError, subprocess.SubprocessError):
@@ -86,7 +83,7 @@ def install_hooks(run_root: Path, case: str, knowledge: dict[str, Any], profile:
         return trace.is_file()
 
     def map_pc(pc: int):
-        if board_elf.is_file() and sig_elf.is_file():
+        if board_elf and sig_elf and board_elf.is_file() and sig_elf.is_file():
             return sail_trace.map_pc(board_elf, sig_elf, pc)
         return None
 
@@ -100,7 +97,15 @@ def install_hooks(run_root: Path, case: str, knowledge: dict[str, Any], profile:
     agent_tools.SAIL_HOOKS.update(generate=generate, map_pc=map_pc)
     agent_tools.SPEC_HOOK.clear()
     agent_tools.SPEC_HOOK.update(search=search)
-    os.environ["TRIAGE_TOOL_ROOTS"] = str(run_root.resolve())
+    os.environ["TRIAGE_TOOL_ROOTS"] = ":".join(str(r.resolve()) for r in roots)
+
+
+def install_hooks(run_root: Path, case: str, knowledge: dict[str, Any], profile: dict[str, Any]) -> None:
+    """set_hooks for a case in a CI run directory (its kept case files)."""
+    folder = casefile.case_dir(run_root, case)
+    version = re.search(r"sail_version=(\S+)", casefile.act_revision(run_root))
+    set_hooks(folder / "test.elf", folder / "test.sig.elf", run_root / "act" / "config" / "sail.json",
+              version.group(1) if version else "", knowledge, profile, [run_root])
 
 
 def failure_symptom(record: dict[str, Any]) -> dict[str, Any]:

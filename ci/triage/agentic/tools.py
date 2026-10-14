@@ -85,7 +85,9 @@ def norm(value: Any) -> str | None:
 
 # ---------- 1. failure footprint ----------
 
-PC_SOURCES = ("first_trap.pc", "mepc", "failscr_provenance.failing_addr", "approximate_address", "act_first_epc")
+# Trap PCs first (the RVCP trap report gives xepc), the low-provenance FAILSCR address last but one.
+PC_SOURCES = ("first_trap.pc", "mepc", "xepc", "approximate_address", "failscr_provenance.failing_addr",
+              "act_first_epc")
 
 
 def _get(data: dict[str, Any], dotted: str) -> Any:
@@ -114,11 +116,12 @@ def tool_parse_rvcp_log(log_path: str) -> dict[str, Any]:
     else:
         mismatch = None
     trap = None
-    cause = data.get("mcause") or _get(data, "first_trap.mcause")
+    cause = data.get("mcause") or _get(data, "first_trap.mcause") or data.get("xcause")
     if cause:
-        trap = {"mcause": norm(cause), "mepc": norm(data.get("mepc") or _get(data, "first_trap.pc")),
-                "mtval": norm(data.get("mtval") or _get(data, "first_trap.tval")),
-                "mstatus": norm(data.get("mstatus") or _get(data, "first_trap.status")),
+        trap = {"mcause": norm(cause),
+                "mepc": norm(data.get("mepc") or _get(data, "first_trap.pc") or data.get("xepc")),
+                "mtval": norm(data.get("mtval") or _get(data, "first_trap.tval") or data.get("xtval")),
+                "mstatus": norm(data.get("mstatus") or _get(data, "first_trap.status") or data.get("xstatus")),
                 "cause_name": riscv_state_decoder.decode_register("mcause", str(cause), "RV64")["fields"]["name"]}
     return {
         "case": data.get("case_name"), "status": data.get("status"), "category": data.get("category"),

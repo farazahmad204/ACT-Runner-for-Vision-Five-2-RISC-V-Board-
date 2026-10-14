@@ -17,10 +17,12 @@ IBEX = {"board_name": "ibex", "core_name": "lowRISC Ibex", "xlen": 32, "implemen
 VF2 = {"board_name": "VisionFive2", "core_name": "SiFive U74", "xlen": 64, "implemented_isa": "RV64GC",
        "extensions": ["I", "M", "A", "F", "D", "C", "Zicsr", "Zifencei", "S", "U", "Sv39"],
        "privilege_modes": ["M", "S", "U"], "mmu_type": "Sv39"}
-DUT_BUG = {"analysis_status": "COMPLETED", "failure_classification": "DUT_RTL_Bug",
-           "symptom_isolation": "amoadd.w trapped", "identified_root_cause": "the core rejects amoadd.w",
-           "reproduction_steps_or_fix": "file a bug", "tier1_root_cause": {"invariant": "", "instruction": "", "pc": "", "sail_step": "", "divergence": "", "subcomponent": ""},
-         "tier2_remediation": {"fix_kind": "test", "target": "x.S", "directive": "relax the check"}}
+DUT_BUG = {"triage_status": "SUCCESS", "target_board": "ibex", "failure_classification": "DUT_RTL_Bug",
+         "tier_1_root_cause": {"failing_pc": "0x80000a3c", "failing_instruction": "lw a0,1(zero)",
+                               "architectural_symptom": "amoadd.w trapped", "divergence_cycle": "not traceable"},
+         "tier_2_board_specific_remediation": {"remediation_type": "FIRMWARE_WORKAROUND",
+                                               "target_repository_or_file": "runner_machine_trap.c",
+                                               "actionable_fix_directive": "Emulate it."}}
 
 
 def ok(**fields):
@@ -83,7 +85,7 @@ class LoopTests(unittest.TestCase):
             (root / "events.log").write_text('RVCP: Failure: "page fault expected"\nRVCP: MCAUSE: 0xd\n')
             model = Scripted([
                 turn("Read it.", "tool_parse_rvcp_log", {"log_path": str(root / "events.log")}),
-                turn("Hardware bug.", "submit_analysis", {**DUT_BUG, "identified_root_cause": "page fault"}),
+                turn("Hardware bug.", "submit_analysis", {**DUT_BUG, "tier_1_root_cause": {**DUT_BUG["tier_1_root_cause"], "architectural_symptom": "page fault"}}),
                 turn("Then config.", "submit_analysis", {**DUT_BUG, "failure_classification": "Test_Suite_Error"}),
             ])
             final = agent.run_react("SvSm-00", {"log_path": str(root / "events.log"), "isa": "RV32IMC"},

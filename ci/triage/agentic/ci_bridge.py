@@ -23,7 +23,7 @@ from . import tools as agent_tools
 BOARD_KNOWLEDGE = Path(__file__).resolve().parents[1] / "board_knowledge"
 # The agent's four classes onto the portal's classes (and their workbook verdicts).
 CLASS_MAP = {"DUT_RTL_Bug": "DUT noncompliance", "UDB_Config_Mismatch": "Reference-model mismatch",
-             "Test_Suite_Error": "Test issue", "Inconclusive": "Inconclusive"}
+             "Test_Suite_Error": "Test issue", "Environment_Flake": "Environment issue"}
 
 
 def board_profile(run_root: Path, board: str) -> dict[str, Any]:
@@ -53,6 +53,7 @@ def case_inputs(run_root: Path, record: dict[str, Any], profile: dict[str, Any])
     notes = list((record.get("context") or {}).get("items") or [])
     return {
         "case": case,
+        "board": profile.get("board_name"),
         "log_path": str(log) if log.is_file() else None,
         # A kept ELF that is not the one the board ran is withheld (validate_context checked it).
         "elf_path": str(elf) if elf.is_file() and checks.get("elf_matches") is not False else None,
@@ -146,8 +147,10 @@ def test_alignment(run_root: Path, record: dict[str, Any], profile: dict[str, An
 
 
 def to_answer(final: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-    """The agent's final payload as the report/memory answer."""
-    klass = CLASS_MAP.get(final.get("failure_classification"), "Inconclusive")
+    """The validated triage report as the portal/memory answer; the report itself is kept whole
+    under "triage_report". FAILED_TO_ISOLATE is Inconclusive whatever its class."""
+    isolated = final.get("triage_status") == "SUCCESS"
+    klass = CLASS_MAP.get(final.get("failure_classification"), "Inconclusive") if isolated else "Inconclusive"
     steps = [s for s in state.get("steps", []) if s.get("tool") not in ("(none)",)]
     searched_spec = any(s.get("tool") == "tool_search_spec" and s.get("ok") for s in steps)
     notes = []
@@ -159,20 +162,20 @@ def to_answer(final: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     else:
         confidence = "medium"
     if state.get("status") == "budget_exhausted":
-        notes.append("no conclusion within the step budget")
-    tier2 = final.get("tier2_remediation") or {}
-    fix = tier2.get("directive") or final.get("reproduction_steps_or_fix", "")
-    if tier2.get("fix_kind") and tier2.get("fix_kind") != "none":
-        fix = f"[{tier2['fix_kind']}{': ' + tier2['target'] if tier2.get('target') else ''}] {fix}"
+        notes.append("no valid report within the step budget")
+    tier1 = final.get("tier_1_root_cause") or {}
+    tier2 = final.get("tier_2_board_specific_remediation") or {}
+    where = " ".join(p for p in (tier1.get("failing_instruction"), f"at {tier1['failing_pc']}"
+                                 if tier1.get("failing_pc") else "") if p)
     answer = {
         "classification": klass,
         "agent_classification": final.get("failure_classification"),
-        "failure_reason": final.get("symptom_isolation", ""),
-        "root_cause": final.get("identified_root_cause", ""),
-        "next_step": fix,
-        "tier1_root_cause": final.get("tier1_root_cause") or {},
-        "tier2_remediation": tier2,
+        "failure_reason": (f"{where}: " if where else "") + str(tier1.get("architectural_symptom", "")),
+        "root_cause": str(tier1.get("architectural_symptom", "")),
+        "next_step": f"[{tier2.get('remediation_type')}: {tier2.get('target_repository_or_file')}] "
+                     f"{tier2.get('actionable_fix_directive', '')}" if tier2 else "",
         "confidence": confidence,
+        "triage_report": final,
         "investigation": [{"step": s["step"], "hypothesis": (s.get("thought") or "")[:300], "tool": s["tool"],
                            "argument": str(s.get("arguments"))[:200]} for s in steps],
         "sanity": state.get("sanity", []),

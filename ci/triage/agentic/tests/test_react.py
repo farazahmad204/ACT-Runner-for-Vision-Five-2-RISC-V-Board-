@@ -20,11 +20,12 @@ RVCP: MEPC: 0x80000a3c
 RVCP: MCAUSE: 0x5
 RVCP-SUMMARY: TEST FAILED - Test File "x.S"
 """
-FINAL = {"analysis_status": "COMPLETED", "failure_classification": "Test_Suite_Error",
-         "symptom_isolation": "lw at 0x80000a3c: expected cause 4, got 5 (steps 1-2)",
-         "identified_root_cause": "The test assumes misaligned before access fault; the spec allows either.",
-         "reproduction_steps_or_fix": "Relax the test's expected cause.", "tier1_root_cause": {"invariant": "", "instruction": "", "pc": "", "sail_step": "", "divergence": "", "subcomponent": ""},
-         "tier2_remediation": {"fix_kind": "test", "target": "x.S", "directive": "relax the check"}}
+FINAL = {"triage_status": "SUCCESS", "target_board": "x", "failure_classification": "Test_Suite_Error",
+         "tier_1_root_cause": {"failing_pc": "0x80000a3c", "failing_instruction": "lw a0,1(zero)",
+                               "architectural_symptom": "expected cause 4, got 5", "divergence_cycle": "not traceable"},
+         "tier_2_board_specific_remediation": {"remediation_type": "CONFIG_REMAP",
+                                               "target_repository_or_file": "tests/priv/x.S",
+                                               "actionable_fix_directive": "Relax the check."}}
 
 
 class Scripted:
@@ -84,7 +85,7 @@ class ReactLoopTests(unittest.TestCase):
         self.assertIn("Relevant rules", model.observations[0][1])  # knowledge arrives with the parsed failure
         self.assertTrue(state["knowledge"][0]["block"].startswith("Relevant rules"))
         self.assertEqual(state["findings"][0]["text"], "board raised load access fault (cause 5)")
-        self.assertEqual(json.loads((out / "agent_final.json").read_text()), FINAL)
+        self.assertEqual(json.loads((out / "triage_report.json").read_text()), FINAL)
         self.assertIn("Never decode CSR", agent.SYSTEM_PROMPT)
 
     def test_budget_forces_the_final_and_falls_back_to_inconclusive(self):
@@ -93,7 +94,8 @@ class ReactLoopTests(unittest.TestCase):
         model = Scripted(calls)
         final = agent.run_react("Sm-00", self.inputs, self.root / "out2", backend=model, max_steps=3)
         self.assertTrue(model.forced[3])  # the 4th turn is told to submit
-        self.assertEqual(final["failure_classification"], "Inconclusive")
+        self.assertEqual((final["triage_status"], final["failure_classification"]),
+                         ("FAILED_TO_ISOLATE", "Unclassified"))
         self.assertEqual(agent.validate_final(final), [])
         state = json.loads((self.root / "out2" / "agent_state.json").read_text())
         self.assertEqual(state["status"], "budget_exhausted")

@@ -42,8 +42,12 @@ class BridgeTests(unittest.TestCase):
     def test_answer_mapping(self):
         state = {"steps": [{"step": 1, "tool": "tool_parse_rvcp_log", "ok": True, "thought": "t", "arguments": {}}],
                  "sanity": [], "findings": [{"text": "f"}], "status": "completed"}
-        final = {"failure_classification": "DUT_RTL_Bug", "symptom_isolation": "s", "identified_root_cause": "r",
-                 "reproduction_steps_or_fix": "n", "analysis_status": "COMPLETED"}
+        final = {"triage_status": "SUCCESS", "target_board": "x", "failure_classification": "DUT_RTL_Bug",
+                 "tier_1_root_cause": {"failing_pc": "0x1", "failing_instruction": "ebreak",
+                                       "architectural_symptom": "r", "divergence_cycle": 612},
+                 "tier_2_board_specific_remediation": {"remediation_type": "FIRMWARE_WORKAROUND",
+                                                       "target_repository_or_file": "runner.c",
+                                                       "actionable_fix_directive": "n"}}
         answer = ci_bridge.to_answer(final, state)
         self.assertEqual((answer["classification"], answer["confidence"]), ("DUT noncompliance", "low"))
         self.assertIn("without a specification search", answer["checked"])
@@ -51,6 +55,11 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(ci_bridge.to_answer(final, state)["confidence"], "medium")
         self.assertEqual(ci_bridge.to_answer({**final, "failure_classification": "UDB_Config_Mismatch"},
                                              state)["classification"], "Reference-model mismatch")
+        self.assertEqual(ci_bridge.to_answer({**final, "failure_classification": "Environment_Flake"},
+                                             state)["classification"], "Environment issue")
+        failed = ci_bridge.to_answer({**final, "triage_status": "FAILED_TO_ISOLATE"}, state)
+        self.assertEqual(failed["classification"], "Inconclusive")
+        self.assertEqual(ci_bridge.to_answer(final, state)["next_step"], "[FIRMWARE_WORKAROUND: runner.c] n")
 
     def test_sail_trace_is_generated_on_demand_and_the_pc_mapped(self):
         with tempfile.TemporaryDirectory() as d:

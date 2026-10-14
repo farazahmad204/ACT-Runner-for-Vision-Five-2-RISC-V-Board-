@@ -27,10 +27,11 @@ try:
     )
     from .memory import TriageMemory
     from . import casefile, vault
-    from .investigate import ACTIONS, Toolbox, investigate, investigate_skills
+    from .investigate import ACTIONS, Toolbox, investigate, investigate_skills, summarize
     from .skills import SkillContext
-    from .agent import analysis_instructions
+    from .agent import TRIAGE_SYSTEM, analysis_instructions
     from . import spec as spec_index
+    from . import validate_context
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
         declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
@@ -40,9 +41,10 @@ except ImportError:  # run as a script from ci/triage
         failing_address, failure_signature, load_knowledge, rule_analysis, suggested_verdict,
     )
     from memory import TriageMemory  # type: ignore[no-redef]
-    from investigate import ACTIONS, Toolbox, investigate, investigate_skills  # type: ignore[no-redef]
+    from investigate import ACTIONS, Toolbox, investigate, investigate_skills, summarize  # type: ignore[no-redef]
     from skills import SkillContext  # type: ignore[no-redef]
-    from agent import analysis_instructions  # type: ignore[no-redef]
+    from agent import TRIAGE_SYSTEM, analysis_instructions  # type: ignore[no-redef]
+    import validate_context  # type: ignore[no-redef]
     import casefile  # type: ignore[no-redef]
     import spec as spec_index  # type: ignore[no-redef]
     import vault  # type: ignore[no-redef]
@@ -113,7 +115,7 @@ class AIConfig:
 AI_ANSWER_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["hypothesis", "action", "argument", "evidence_ids", "classification", "failure_reason",
+    "required": ["hypothesis", "hypotheses", "action", "argument", "evidence_ids", "classification", "failure_reason",
                  "root_cause", "confidence", "next_step", "spec_version", "spec_quote"],
     "properties": {
         # One investigation step (investigate.py): a tool to run next, or "answer".
@@ -122,6 +124,16 @@ AI_ANSWER_SCHEMA = {
         "argument": {"type": "string"},
         # Skill mode: the evidence ids (log.1, spec.2...) the answer relies on; [] otherwise.
         "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        # Skill mode: the competing hypotheses and the evidence for and against each; [] otherwise.
+        "hypotheses": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["text", "status", "supported_by", "contradicted_by"],
+            "properties": {
+                "text": {"type": "string"},
+                "status": {"type": "string", "enum": ["open", "confirmed", "ruled_out"]},
+                "supported_by": {"type": "array", "items": {"type": "string"}},
+                "contradicted_by": {"type": "array", "items": {"type": "string"}},
+            }}},
         "classification": {"type": "string", "enum": [
             "DUT noncompliance", "Unsupported feature", "Test issue", "Firmware issue",
             "Reference-model mismatch", "Implementation-defined behavior", "Environment issue",
@@ -447,10 +459,7 @@ def call_openai(prompt: str, config: AIConfig, api_key: str) -> tuple[str, dict[
     body = json.dumps(
         {
             "model": config.model or "gpt-5",
-            "instructions": (
-                "You are a cautious RISC-V ACT failure-analysis assistant. "
-                "Evidence may be incomplete. Never alter certification results."
-            ),
+            "instructions": TRIAGE_SYSTEM,
             "input": prompt,
             "max_output_tokens": config.max_output_tokens,
             "store": False,
@@ -532,7 +541,7 @@ def call_codex(prompt: str, config: AIConfig, api_key: str = "") -> tuple[str, d
             command.append("-")
             try:
                 process = subprocess.run(
-                    command, input=prompt, text=True, capture_output=True,
+                    command, input=f"{TRIAGE_SYSTEM}\n\n{prompt}", text=True, capture_output=True,
                     timeout=config.timeout_seconds, cwd=work,
                 )
             except subprocess.TimeoutExpired:
@@ -638,6 +647,9 @@ def build_report(record: dict[str, Any], board_versions: dict[str, str]) -> dict
         "checked": analysis.get("checked", ""),
         "investigation": analysis.get("investigation", []),
         "evidence": analysis.get("evidence", []),
+        "hypotheses": analysis.get("hypotheses", []),
+        "context_checks": (record.get("context") or {}).get("items", []),
+        "revisions": (record.get("context") or {}).get("revisions", {}),
         "failure": ex.get("failure") or ex.get("damo_assert") or "",
         "check": ex.get("test_info", ""),
         "instruction": case.get("instruction") or {},
@@ -659,6 +671,13 @@ def build_report(record: dict[str, Any], board_versions: dict[str, str]) -> dict
         "act_revision": case.get("act_revision", ""),
         "signature": record.get("signature", ""),
     }
+
+
+def stale(stored: dict[str, Any], current: dict[str, Any]) -> bool:
+    """An AI answer is reused only for the ACT commit, Sail version and spec versions it was made
+    for (answers stored before revisions were recorded are reused as before)."""
+    return any(stored.get(k) and current.get(k) and stored[k] != current[k]
+               for k in ("act_commit", "sail_version", "spec_versions"))
 
 
 def skill_header(lead: dict[str, Any], names: list[str], knowledge: dict[str, Any]) -> str:
@@ -721,9 +740,15 @@ def run_triage(
         record = {"case": case, "evidence": evidence, "signature": signature,
                   "analysis": None, "source": "", "ai_status": "DISABLED", "ai_error": ""}
         test = evidence["case"]
+        # Can the kept evidence be trusted, and which revisions does an analysis apply to?
+        context = validate_context.check(run_root, test, board, log_text, knowledge)
+        evidence["context_checks"] = context["checks"]
+        record["context"] = context
         hit = memory.lookup(board, signature, test)
         if refresh_memory and hit and hit["source"] != "person":
             hit = None  # analyze again; a person's verdict is still authoritative
+        if hit and hit["source"] == "ai" and stale(hit.get("revisions") or {}, context["revisions"]):
+            hit = None  # an AI answer about another ACT/Sail revision or spec version: analyze again
         attach_value_diff(evidence, log_text, knowledge)
         # Steps 2-3: the failing instruction and what the test does there (from the kept files).
         record["casefile"] = casefile.build(run_root, test, evidence.get("extracted", {}),
@@ -798,6 +823,7 @@ def run_triage(
             "isa": board_isa,
             "known_issues": vault.context_lines(members[0].get("known_issues") or []),
             "issues": related_issues(lead["case"], issue_terms(lead), exclude=known_ids),
+            "environment": (members[0].get("context") or {}).get("items", []),
         }
         related = memory.related(board, lead["deterministic_category"], signature)
         prompt = compact_prompt(
@@ -814,7 +840,8 @@ def run_triage(
             if ai_config.mode == "skills":
                 header = skill_header(lead, names, knowledge)
                 text, raw_response, steps, found = investigate_skills(
-                    header, SkillContext(lead, case_file, grounding, knowledge, related), ask, toolbox,
+                    header, SkillContext(lead, case_file, grounding, knowledge, related,
+                                         (members[0].get("context") or {}).get("items", [])), ask, toolbox,
                     max(0, ai_config.max_steps), analysis_instructions())
                 evidence_ids = {key for key in found if not key.startswith("note.")}
                 prompt = header  # for the size metadata
@@ -832,8 +859,10 @@ def run_triage(
             if evidence_ids is not None:
                 answer["evidence"] = [{"id": key, "text": found[key][:600]}
                                       for key in answer.get("evidence_ids") or []]
+                answer["hypotheses"] = summarize(answer.get("hypotheses"))
             else:
                 answer.pop("evidence_ids", None)
+                answer.pop("hypotheses", None)
             metadata = {key: raw_response.get(key) for key in
                         ("id", "provider", "model", "created_at", "status", "usage") if key in raw_response}
             metadata.update(prompt_chars=len(prompt), cluster_size=len(members), steps=steps,
@@ -845,6 +874,7 @@ def run_triage(
                             + [f"case:{k}" for k in case_file if k != "act_revision"])
             source = "AI" + (f" after {len(steps)} tool step(s)" if steps else "") + (f" (one analysis shared by {len(members)} tests with this failure signature)"
                              if len(members) > 1 else "")
+            answer["revisions"] = (members[0].get("context") or {}).get("revisions", {})
             for member in members:
                 member.update(analysis=answer, source=source, ai_status="SUCCESS", metadata=metadata)
                 memory.remember(board, signature, member["evidence"]["case"], "ai",

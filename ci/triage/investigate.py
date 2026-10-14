@@ -44,7 +44,7 @@ TOOLS = {
     "test_source": "<label or text> lines of the generated test source (test.S) around it",
     "sail_config": "<words> the board's Sail settings (sail.json) that mention them",
 }
-ACTIONS = ["answer", "skill", *TOOLS]
+ACTIONS = ["answer", "skill", "expand", *TOOLS]
 CHALLENGE = ("Before this answer is accepted, check it: run at least one tool whose result would "
              "confirm or rule it out (for example what Sail did at the failing address, or what the "
              "board's spec version says about it), then answer.")
@@ -195,16 +195,30 @@ def investigate(prompt: str, ask: Callable[[str], tuple[str, dict[str, Any]]], t
 # ---------- skill-driven investigation (AI_TRIAGE_MODE=skills) ----------
 
 SKILL_REPLY = (
-    "Investigate like a verification engineer: observe the failure, understand the instruction, "
-    "keep two or three competing hypotheses, and load the skill (or run the tool) whose evidence "
-    "best separates them; stop when one hypothesis is confirmed and the others are ruled out. "
-    "Every reply is JSON with: hypothesis (the competing hypotheses and what the next step would "
-    "confirm or rule out), action (\"skill\" to load a skill, a tool name, or \"answer\"), "
-    "argument (the skill name, or the tool's input), evidence_ids (the ids, e.g. log.1, spec.2, "
-    "of the evidence your answer relies on; the answer must cite at least one, and a hardware "
-    "bug needs the observed behavior, the reference or test expectation, and the spec rule), and "
-    "your best answer so far in the answer fields."
+    "Investigate like a verification engineer: read the context checks, observe the failure, "
+    "understand the instruction, keep two or three competing hypotheses, and load the skill (or "
+    "run the tool) whose evidence best separates them; stop when one hypothesis is confirmed and "
+    "the others are ruled out. Keep measured facts (evidence ids) apart from assumptions. Every "
+    "reply is JSON with: hypotheses (each with text, status open / confirmed / ruled_out, "
+    "supported_by and contradicted_by as evidence ids), hypothesis (one line: what the next step "
+    "will confirm or rule out), action (\"skill\" to load a skill, \"expand\" to see a truncated "
+    "item whole, a tool name, or \"answer\"), argument (the skill name, evidence id or tool input), "
+    "evidence_ids (the ids your answer relies on), and your best answer so far in the answer "
+    "fields. To answer, exactly one hypothesis is confirmed, supported by evidence and contradicted "
+    "by none; a hardware bug also needs the observed behavior, the reference or test expectation "
+    "and the spec rule."
 )
+
+
+def summarize(hypotheses: Any) -> list[dict[str, Any]]:
+    """The model's hypotheses, kept small for the report."""
+    out = []
+    for h in hypotheses if isinstance(hypotheses, list) else []:
+        if isinstance(h, dict) and h.get("text"):
+            out.append({"text": str(h["text"])[:300], "status": str(h.get("status") or "open"),
+                        "supported_by": [str(i) for i in h.get("supported_by") or []][:8],
+                        "contradicted_by": [str(i) for i in h.get("contradicted_by") or []][:8]})
+    return out[:5]
 
 
 class Investigation:
@@ -214,6 +228,7 @@ class Investigation:
         self.ctx = ctx
         self.loaded: list[str] = []
         self.evidence: dict[str, str] = {}
+        self.expanded: set[str] = set()
         self.tool_results = 0
 
     def load(self, name: str) -> str:
@@ -237,8 +252,10 @@ class Investigation:
         for name in self.loaded:
             meta = skills.catalog()[name]
             parts.append(f"## Skill: {meta['title']} ({name})\n{meta['body']}\nEvidence:")
-            parts += [f"[{key}] {text}" for key, text in self.evidence.items() if key.startswith(name + ".")]
-        tools = [f"[{key}] {text}" for key, text in self.evidence.items() if key.startswith("tool.")]
+            parts += [f"[{key}] {skills.shown(text, key, key in self.expanded)}"
+                      for key, text in self.evidence.items() if key.startswith(name + ".")]
+        tools = [f"[{key}] {skills.shown(text, key, key in self.expanded)}"
+                 for key, text in self.evidence.items() if key.startswith("tool.")]
         if tools:
             parts.append("## Tool results\n" + "\n".join(tools))
         return "\n".join(parts)
@@ -298,10 +315,17 @@ def investigate_skills(header: str, ctx: "skills.SkillContext", ask: Callable[[s
             return text, raw, steps, inv.evidence
         if action == "skill":
             result = inv.load(argument)
+        elif action == "expand":
+            if argument in inv.evidence:
+                inv.expanded.add(argument)
+                result = f"{argument} shown whole"
+            else:
+                result = f"No evidence {argument!r}."
         elif action in TOOLS:
             output = toolbox.run(action, argument)
             result = f"result as {inv.add_tool_result(action, argument, output)}"
         else:
             result = f"Unknown action {action!r}."
         steps.append({"step": len(steps), "hypothesis": str(reply.get("hypothesis") or "")[:400],
-                      "tool": action, "argument": argument[:200], "result": result})
+                      "tool": action, "argument": argument[:200], "result": result,
+                      "hypotheses": summarize(reply.get("hypotheses"))})

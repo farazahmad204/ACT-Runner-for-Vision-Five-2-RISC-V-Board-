@@ -198,7 +198,8 @@ class CITriageTests(unittest.TestCase):
         disabled = {args[i + 1] for i, arg in enumerate(args) if arg == "--disable"}
         self.assertTrue({"shell_tool", "unified_exec", "code_mode_host"} <= disabled)
         self.assertNotIn("-m", args)  # blank model: Codex's default
-        self.assertEqual(seen["stdin"], "evidence prompt")
+        self.assertTrue(seen["stdin"].startswith("You are the primary triage engineer"))
+        self.assertTrue(seen["stdin"].endswith("\n\nevidence prompt"))
 
     def test_skipped_cases_are_not_triaged(self):
         with tempfile.TemporaryDirectory() as temporary:

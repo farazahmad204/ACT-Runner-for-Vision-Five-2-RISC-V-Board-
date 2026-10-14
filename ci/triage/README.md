@@ -243,6 +243,24 @@ checkouts on the agent are used (the one at the run's ACT commit first).
 Each investigation is kept in `per_case/<case>/agent/agent_state.json` (every thought, tool
 call, observation, finding, sanity check) and `agent_final.json`.
 
+### One failure from the command line (`agentic/triage_suite.py`)
+
+The same agent outside the CI run directory, from explicit files:
+
+```bash
+python3 ci/triage/agentic/triage_suite.py --log uart.log --elf test.elf \
+  --board-config ci/triage/board_knowledge/milkv_megrez_eic7700x.yaml --board-config act/config/<udb>.yaml \
+  --sig-elf test.sig.elf --sail-config act/config/sail.json --sail-version 0.15 --test-source test.S \
+  --out-dir triage_out [--dry-run]
+```
+
+It checks every input first (a missing, unreadable or non-ELF file is named with the reason;
+exit 2), builds the hardware profile (the board configs in order, first source of a field wins)
+and the [TEST INTENT] / [SPECIFICATION INVARIANTS] (failing check from the trap PC in the log),
+runs the agent, writes `triage_out/triage_report.json` (validated) and `agent_state.json`, and
+prints a markdown summary. Exit 0 isolated, 1 FAILED_TO_ISOLATE, 2 bad input, 3 the agent could
+not run. `--dry-run` prints the assembled first message without calling a model.
+
 ## AI analysis
 
 With `RUN_AI_TRIAGE` (default on) every failed case also gets an AI analysis: a

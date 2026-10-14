@@ -17,6 +17,7 @@ ALLOWED_JENKINSFILES = {
     "Jenkinsfile.uart-single-elf",
     "Jenkinsfile.uart-triage",
     "Jenkinsfile.board-health",
+    "Jenkinsfile.board-pipeline",
 }
 FORBIDDEN_PATHS = {
     "runner_sd.c",

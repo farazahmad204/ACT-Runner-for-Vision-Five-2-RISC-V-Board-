@@ -149,3 +149,31 @@ class QuotaTests(unittest.TestCase):
             backend.start("S", "U")
             with self.assertRaises(agent.QuotaExhausted):
                 backend.next(force_final=False)
+
+
+class HistoryTests(unittest.TestCase):
+    def test_history_tool_returns_structured_matches(self):
+        from ci.triage.agentic import tools
+        result = tools.dispatch("tool_query_historical_issues",
+                                {"failure_keywords": "c.ebreak mcause access fault", "hardware_tags": ["Zca"],
+                                 "test_name": "ExceptionsZc-00"})
+        self.assertTrue(result["ok"])
+        top = result["matches"][0]
+        self.assertEqual(top["issue_number"], 1172)
+        self.assertEqual(top["status"], "CLOSED")
+        self.assertTrue(top["symptom_pattern"] and top["root_cause_or_workaround"])
+        bad = tools.dispatch("tool_query_historical_issues", {"failure_keywords": "x y z", "hardware_tags": "H"})
+        self.assertIn("must be a list of strings", bad["error"])
+
+    def test_skipping_sail_needs_a_cited_historical_issue(self):
+        report = {"triage_status": "SUCCESS", "tier_1_root_cause": {"architectural_symptom": "known framework bug"}}
+        inputs = {"sail_trace_path": "/x.sig.trace"}
+        state = {"steps": [{"tool": "tool_query_historical_issues", "ok": True}], "history_matches": [2670]}
+        self.assertTrue(agent.history_bypass_problems(report, state, inputs))
+        cited = {**report, "tier_1_root_cause": {"architectural_symptom": "matches ACT#2670 (open Sail issue)"}}
+        self.assertEqual(agent.history_bypass_problems(cited, state, inputs), [])
+        made_up = {**report, "tier_1_root_cause": {"architectural_symptom": "matches ACT#9999"}}
+        self.assertTrue(agent.history_bypass_problems(made_up, state, inputs))  # not a returned issue
+        compared = {"steps": [{"tool": "tool_query_sail_trace", "ok": False}]}
+        self.assertEqual(agent.history_bypass_problems(report, compared, inputs), [])
+        self.assertEqual(agent.history_bypass_problems(report, {"steps": []}, {"sail_trace_path": None}), [])

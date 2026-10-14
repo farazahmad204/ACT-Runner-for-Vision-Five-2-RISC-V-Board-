@@ -73,9 +73,17 @@ behavior: the test binary was built for the wrong ISA (Test_Suite_Error) or the 
 extension (UDB_Config_Mismatch). Never a DUT_RTL_Bug.
    - XLEN: an ELF or value of the other XLEN means the wrong binary or a misread log, not a hardware bug.
    The tools mark such cases with ARCHITECTURAL SANITY lines; a DUT_RTL_Bug answer that contradicts one is rejected.
-4. Board errata. If the first message includes the board's platform notes (known errata, measured \
+4. History. Before deep trace analysis, call tool_query_historical_issues with the precise symptom (instruction, \
+CSR, cause, field) and the extensions/tools involved. If a returned issue perfectly matches - the same test or \
+coverpoint, the same instruction or CSR, and the same symptom values - you may skip the deep Sail trace \
+differential: if it is an OPEN framework or test bug, classify Test_Suite_Error; an OPEN Sail/simulator or \
+reference-configuration bug, UDB_Config_Mismatch; a CLOSED one, check whether the board's ACT revision has the fix \
+before relying on it. Cite the issue (ACT#<number>) in architectural_symptom and in the fix directive. A partial \
+match is context, not an answer, and history never proves a DUT_RTL_Bug on its own. This prevents chasing ghost \
+bugs that the framework or simulator already explains.
+5. Board errata. If the first message includes the board's platform notes (known errata, measured \
 delegation, known priority behavior, known ACT issues), check the failure against them before calling it new.
-5. Decide. Sail, ACT and the board can each be wrong. A difference from Sail is a DUT_RTL_Bug only if the \
+6. Decide. Sail, ACT and the board can each be wrong. A difference from Sail is a DUT_RTL_Bug only if the \
 specification version the board implements requires Sail's behavior and no sanity check or erratum explains it.
 
 The final report (submit_analysis) has two tiers:
@@ -389,6 +397,23 @@ class CodexBackend:
         pass  # the history comes from the case state
 
 
+def history_bypass_problems(report: dict, state: dict, inputs: dict) -> list[str]:
+    """A SUCCESS that skipped the Sail comparison (when one was available) must rest on a historical
+    issue the tool returned, cited by number; otherwise the shortcut is not allowed."""
+    if not isinstance(report, dict) or report.get("triage_status") != "SUCCESS" or not inputs.get("sail_trace_path"):
+        return []
+    # Asking Sail counts even when it had no answer (e.g. the instruction is not in the Sail build).
+    compared = any(s.get("tool") == "tool_query_sail_trace" for s in state.get("steps", []))
+    if compared:
+        return []
+    text = json.dumps(report)
+    cited = [n for n in state.get("history_matches", []) if re.search(rf"(?:ACT#|#){n}\b", text)]
+    if cited:
+        return []
+    return ["a SUCCESS without comparing to Sail (tool_query_sail_trace) must cite the matching historical issue "
+            "returned by tool_query_historical_issues (ACT#<number>); compare with Sail or use FAILED_TO_ISOLATE"]
+
+
 def validate_final(payload: dict, sanity: list[dict] | None = None, profile: dict | None = None) -> list[str]:
     """Every problem with a final report: the exact schema (report_schema.validate_report) and
     the rules it cannot express (target board, RTL only on open cores, sanity checks)."""
@@ -453,6 +478,7 @@ def run_react(case: str, inputs: dict, out_dir: Path, backend_name: str = "codex
         for call in turn.calls:
             if call.name == "submit_analysis":
                 problems = validate_final(call.arguments, state.data.get("sanity"), profile)
+                problems += history_bypass_problems(call.arguments, state.data, inputs)
                 if not problems:
                     final = call.arguments
                     state.record(turn.thought, call.name, call.arguments, {"ok": True}, "final analysis accepted")
@@ -474,6 +500,10 @@ def run_react(case: str, inputs: dict, out_dir: Path, backend_name: str = "codex
                 backend.observe(call, text)
                 continue
             result = triage_tools.dispatch(call.name, call.arguments, profile)
+            if call.name == "tool_query_historical_issues" and result.get("ok"):
+                state.data.setdefault("history_matches", [])
+                state.data["history_matches"] += [m["issue_number"] for m in result.get("matches") or []
+                                                  if m["issue_number"] not in state.data["history_matches"]]
             text = compact(result)
             knowledge = knowledge_for(case, profile, call.name, result, shown)
             for item in architectural_sanity(profile, call.name, result):

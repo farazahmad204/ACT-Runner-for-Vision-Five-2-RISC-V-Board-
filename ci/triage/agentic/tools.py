@@ -427,6 +427,20 @@ def tool_search_spec(query: str) -> dict[str, Any]:
     return {"query": query, "passages": text or "no passage matches; try other words (CSR, field or exception names)"}
 
 
+# ---------- 6. historical issues ----------
+
+def tool_query_historical_issues(failure_keywords: str, hardware_tags: list[str] | None = None,
+                                 test_name: str = "") -> dict[str, Any]:
+    """The 2-3 riscv-arch-test issues (open or closed, scraped and team-curated) most like this
+    failure, each with its symptom pattern and root cause or workaround."""
+    from .issue_memory_vault import tool_query_historical_issues as query
+    matches = query(failure_keywords, hardware_tags or [], test=test_name)
+    keep = ("issue_number", "status", "title", "tags", "symptom_pattern", "root_cause_or_workaround", "url", "cause",
+            "curated", "score", "matched_terms", "matched_tags", "same_test")
+    return {"matches": [{k: m[k] for k in keep} for m in matches],
+            "note": "" if matches else "no historical issue matches; continue the investigation"}
+
+
 # ---------- registry ----------
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -519,12 +533,33 @@ TOOL_SCHEMAS.append({
                                                 "'priority', 'delegation', 'WARL'..."}},
     },
 })
+TOOL_SCHEMAS.append({
+    "name": "tool_query_historical_issues",
+    "description": (
+        "Search the memory of riscv-arch-test GitHub issues (open and closed, plus the team's curated notes) for "
+        "known framework bugs, Sail/simulator issues and toolchain quirks like this failure. Returns up to 3 "
+        "issues with their symptom pattern, root cause or workaround, status and how well they match. Call it "
+        "early, before deep trace analysis."),
+    "parameters": {
+        "type": "object", "additionalProperties": False, "required": ["failure_keywords"],
+        "properties": {
+            "failure_keywords": {"type": "string", "minLength": 3, "maxLength": 300,
+                                 "description": "The symptom in precise words: instruction, CSR, cause, field, "
+                                                "e.g. 'htinst zero guest page fault implicit hlv'."},
+            "hardware_tags": {"type": "array", "items": {"type": "string"}, "maxItems": 10,
+                              "description": "Extensions, tools or instructions involved, e.g. ['H', 'Sv39x4', "
+                                             "'Sail']."},
+            "test_name": {"type": "string", "maxLength": 100, "description": "The failing test, if known."},
+        },
+    },
+})
 FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "tool_parse_rvcp_log": tool_parse_rvcp_log,
     "tool_get_disassembly": tool_get_disassembly,
     "tool_decode_hardware_state": tool_decode_hardware_state,
     "tool_query_sail_trace": tool_query_sail_trace,
     "tool_search_spec": tool_search_spec,
+    "tool_query_historical_issues": tool_query_historical_issues,
 }
 
 
@@ -578,6 +613,11 @@ def validate(schema: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any
                 raise ToolError(f"{name} is longer than {prop['maxLength']} characters")
             if "pattern" in prop and not re.fullmatch(prop["pattern"], value):
                 raise ToolError(f"{name}={value!r} does not match {prop['pattern']}")
+        elif prop["type"] == "array":
+            if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+                raise ToolError(f"{name} must be a list of strings")
+            if len(value) > prop.get("maxItems", 100):
+                raise ToolError(f"{name} has more than {prop['maxItems']} items")
         elif prop["type"] == "integer":
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ToolError(f"{name} must be an integer")

@@ -18,11 +18,12 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Portal slug -> USB-UART device and smart-plug name in devices.json (None: no plug yet).
+# Portal slug -> USB-UART device and its outlet: <devices.json name>:<socket> on the power strip
+# (None: no switchable outlet).
 BOARDS = {
-    "visionfive2": {"serial": "/dev/ttyCI-vf2", "plug": None},
-    "bananapi-f3": {"serial": "/dev/ttyCI-bpif3", "plug": None},
-    "milkv-megrez": {"serial": "/dev/ttyCI-megrez", "plug": "SCW1050"},
+    "visionfive2": {"serial": "/dev/ttyCI-vf2", "plug": "MELECTRO:2"},
+    "bananapi-f3": {"serial": "/dev/ttyCI-bpif3", "plug": "MELECTRO:3"},
+    "milkv-megrez": {"serial": "/dev/ttyCI-megrez", "plug": "MELECTRO:1"},
 }
 
 
@@ -38,8 +39,10 @@ def check_serial(path: str) -> tuple[bool, str]:
     return True, "present"
 
 
-def check_plug(devices: list[dict], name: str, timeout: float) -> tuple[bool, str, str]:
-    """Return (reachable, reason, power) using a read-only status query."""
+def check_plug(devices: list[dict], outlet: str, timeout: float) -> tuple[bool, str, str]:
+    """Return (reachable, reason, power) of the outlet using a read-only status query."""
+    name, _, socket = outlet.partition(":")
+    socket = socket or "1"
     matches = [d for d in devices if d.get("name") == name]
     if len(matches) != 1:
         return False, f"smart plug {name} is not configured", "unknown"
@@ -58,7 +61,7 @@ def check_plug(devices: list[dict], name: str, timeout: float) -> tuple[bool, st
     if not isinstance(dps, dict):
         error = response.get("Error", "no reply") if isinstance(response, dict) else "no reply"
         return False, f"smart plug {name} unreachable ({error})", "unknown"
-    power = {True: "on", False: "off"}.get(dps.get("1"), "unknown")
+    power = {True: "on", False: "off"}.get(dps.get(socket), "unknown")
     return True, "reachable", power
 
 

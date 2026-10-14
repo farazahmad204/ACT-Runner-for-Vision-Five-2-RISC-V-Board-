@@ -12,20 +12,20 @@ board_settings() {
     visionfive2)
       board_id="vf2_jh7110"
       serial_default=/dev/ttyCI-vf2
-      power_device="${POWER_DEVICE_NAME:-SCW1050}"
+      power_device="${POWER_DEVICE_NAME:-MELECTRO:2}"
       ready_timeout_default=240
       ;;
     bananapi-f3)
       board_id="bpif3_k1"
       serial_default=/dev/ttyCI-bpif3
-      power_device="${POWER_DEVICE_NAME:-SCW1050}"
+      power_device="${POWER_DEVICE_NAME:-MELECTRO:3}"
       ready_timeout_default=240
       ;;
     milkv-megrez)
       # SPI boot + DDR training reaches READY in about 157 s.
       board_id="milkv_megrez_eic7700x"
       serial_default=/dev/ttyCI-megrez
-      power_device="${POWER_DEVICE_NAME:-SCW1050}"
+      power_device="${POWER_DEVICE_NAME:-MELECTRO:1}"
       ready_timeout_default=300
       ;;
     *)

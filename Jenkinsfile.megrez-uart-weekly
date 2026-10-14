@@ -33,8 +33,8 @@ pipeline {
             description: 'Power-cycle Megrez and stream every runnable ELF to its persistent UART runner.')
         string(name: 'SERIAL_DEV', defaultValue: '/dev/ttyCI-megrez',
             description: 'Megrez external USB-TTL adapter on UART0 (USB-C debug port must be unplugged).')
-        string(name: 'POWER_DEVICE_NAME', defaultValue: 'SCW1050',
-            description: 'Megrez smart-outlet name in devices.json (shared with BPI-F3).')
+        string(name: 'POWER_DEVICE_NAME', defaultValue: 'MELECTRO:1',
+            description: 'Megrez smart-outlet name in devices.json, <name>:<socket> for a strip outlet.')
         string(name: 'INSTALLED_RUNNER_BUILD', defaultValue: '',
             description: 'Optional override; blank uses ci/runner_inventory.json.')
         string(name: 'UART_READY_TIMEOUT', defaultValue: '300',
@@ -67,7 +67,7 @@ pipeline {
         // ESWIN nsign packaging tree for the Megrez boot image (pinned rockos-opensbi checkout).
         MEGREZ_NSIGN_ROOT = '/data/ci/megrez-deps/rockos-opensbi'
         INSTALLED_RUNNER_BUILD = "${params.INSTALLED_RUNNER_BUILD ?: ''}"
-        UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'SCW1050'}"
+        UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'MELECTRO:1'}"
         PATH = '/data/ci/bin:/data/ci/toolchains/riscv64/bin:/usr/local/bin:/usr/bin:/bin'
     }
 
@@ -145,10 +145,7 @@ pipeline {
         stage('Megrez UART Execute') {
             when { expression { return params.RUN_HARDWARE } }
             steps {
-                // SCW1050 powers the Megrez now. It is also the BPI-F3 outlet and the default
-                // (first devices.json entry) for the VF2 jobs: hold all three board locks.
-                lock(resource: 'vf2-hardware') {
-                lock(resource: 'bpif3-hardware') {
+                // The Megrez has its own socket on the power strip (MELECTRO:1).
                 lock(resource: 'megrez-hardware') {
                     catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                         sh '''#!/usr/bin/env bash
@@ -159,8 +156,6 @@ pipeline {
                               ci/jenkins/uart_weekly_megrez.sh run
                         '''
                     }
-                }
-                }
                 }
             }
         }

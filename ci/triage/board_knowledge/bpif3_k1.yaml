@@ -1,5 +1,7 @@
 # Banana Pi BPI-F3. Only measured or documented facts.
 board: bpif3_k1
+# Fixed silicon (a commercial SoC): fixes are workarounds or vendor errata, never RTL.
+core_type: hard_macro
 facts:
   - "SpacemiT K1 with X60 cores: RVA22 profile with RVV 1.0 (SpacemiT K1 documentation)."
 act_config: config/cores/bpif3/bpif3-rva22s64/bpif3-rva22s64.yaml

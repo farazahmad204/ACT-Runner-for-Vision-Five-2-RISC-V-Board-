@@ -2,6 +2,8 @@
 # Only measured or documented facts belong here: each one is sent to the AI and used by the
 # deterministic rules, so an unverified entry turns into confident wrong root causes.
 board: milkv_megrez_eic7700x
+# Fixed silicon (a commercial SoC): fixes are workarounds or vendor errata, never RTL.
+core_type: hard_macro
 facts:
   - "SiFive P550 implements privileged architecture 1.11 and the hypervisor extension as draft 0.6, not ratified H 1.0 (EIC7700X TRM v1.0.0 Part 1, Table 3-5; OpenSBI 'Priv Version v1.11')."
   - "The ACT config declares priv 1.12 and H 1.0 only so that UDB generates H tests: tests may expect ratified behavior the core does not claim."

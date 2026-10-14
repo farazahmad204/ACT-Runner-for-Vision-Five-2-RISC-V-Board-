@@ -19,7 +19,8 @@ VF2 = {"board_name": "VisionFive2", "core_name": "SiFive U74", "xlen": 64, "impl
        "privilege_modes": ["M", "S", "U"], "mmu_type": "Sv39"}
 DUT_BUG = {"analysis_status": "COMPLETED", "failure_classification": "DUT_RTL_Bug",
            "symptom_isolation": "amoadd.w trapped", "identified_root_cause": "the core rejects amoadd.w",
-           "reproduction_steps_or_fix": "file a bug"}
+           "reproduction_steps_or_fix": "file a bug", "tier1_root_cause": {"invariant": "", "instruction": "", "pc": "", "sail_step": "", "divergence": "", "subcomponent": ""},
+         "tier2_remediation": {"fix_kind": "test", "target": "x.S", "directive": "relax the check"}}
 
 
 def ok(**fields):

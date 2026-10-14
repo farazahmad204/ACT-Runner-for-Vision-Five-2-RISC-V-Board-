@@ -175,29 +175,36 @@ Store/AMO address misaligned (6) above Store/AMO page fault (15) in its fixed ex
 only from 1.12 is misaligned "Optionally" before translation. So reporting cause 6 is what the
 board's own version requires.
 
-## What the AI is given (`context.py`)
+## The ReAct triage agent (`agentic/`)
 
-Each AI question is grounded, every part small and best effort:
+Failures the cheaper layers (people's verdicts, vault notes, memory, board rules) do not
+explain are investigated by a ReAct agent, once per failure signature
+(`agentic/ci_bridge.py` -> `agentic/react.py`):
 
-- **Test source**: the test's own code around the failing check (addr2line on the failing
-  PC, or the file:line a damo assertion prints), looked up under `TRIAGE_SOURCE_ROOTS`
-  (default: the Jenkins workspace with `external/riscv-arch-test` and
-  `external/damo-rv-priv-ats`; paths recorded by another workspace are remapped).
-- **Requirements**: damo `norm:<ID>` tags in that code resolved to the exact spec sentence
-  from the suite's `NORM/` tables.
-- **Spec text**: the board's own specification versions (see above). Boards without
-  `spec_versions` fall back to two passages of the current privileged spec
-  (`knowledge/priv_spec_chunks.json.gz`, `tools/build_spec_index.py`).
-- **Similar ACT issues**: the two riscv-arch-test issues (of all 645, open and closed, in
-  `knowledge/act_issues.json.gz`; refresh with `tools/build_issue_index.py --cache DIR`) that
-  name the same test or family, or share two rare identifiers (CSR, field, coverpoint names)
-  with the failure. Issues already matched as vault notes are not repeated.
-- **Declared ISA**: the extensions the board's ACT config declares (`act_config` in
-  `board_knowledge/<board>.yaml`) with its DEVIATION notes.
+1. **First message**, in this order: the target hardware profile (`agentic/hardware.py`: the
+   board's `board_knowledge` file and onboarding board spec, completed from the run's ACT
+   config), the board's own platform errata, the team's issue notes and riscv-arch-test issues
+   that may match, the diagnostic lines of the UART log, and the tool inputs.
+2. **Loop** (up to `AI_TRIAGE_MAX_STEPS` tool calls, default 12): the model reasons out loud,
+   calls one tool (`agentic/tools.py`), and reads the observation:
+   - `tool_parse_rvcp_log`: the failure footprint;
+   - `tool_get_disassembly`: the failing instruction in the ELF that ran (objdump of the board's
+     XLEN, CSR names of its privileged spec; ELF built for other extensions is flagged);
+   - `tool_decode_hardware_state`: a register field by field, in the board's XLEN layout;
+   - `tool_query_sail_trace`: Sail at the same instruction (Sail is run on demand from
+     `test.sig.elf` and the board's `sail.json`; the board PC is mapped to the Sail build);
+   - `tool_search_spec`: the spec text of the versions the board implements;
+   - `record_finding`.
+   Observations carry just-in-time rules from `agentic/knowledge/` (this board's only) and
+   `ARCHITECTURAL SANITY` lines when the failure is impossible on the core (no MMU, missing
+   A/C/F, other XLEN). A repeated call is answered from the cache.
+3. **Answer** (`submit_analysis`): DUT_RTL_Bug, UDB_Config_Mismatch, Test_Suite_Error or
+   Inconclusive, with symptom, root cause and fix. It must match the schema and the sanity
+   checks, else it is sent back. Mapped to the report: DUT noncompliance, Reference-model
+   mismatch, Test issue, Inconclusive; a hardware bug without a spec search is low confidence.
 
-On Megrez weekly #5 every AI question carried source, spec and ISA (about 5.7 KB each,
-15 calls); the AI then cited the H 1.0 htinst/mtinst rule and asked for the missing
-htval/mtval2 value instead of guessing.
+Each investigation is kept in `per_case/<case>/agent/agent_state.json` (every thought, tool
+call, observation, finding, sanity check) and `agent_final.json`.
 
 ## AI analysis
 
@@ -212,65 +219,12 @@ workbook's AI analysis column. It is advisory and never changes a verdict.
   plugins), so it can only read the prompt and answer: the read-only sandbox alone
   would still let commands read files on the agent, and Run ELF logs come from
   users' own ELFs. Usage counts against that ChatGPT plan.
-- `AI_TRIAGE_PROVIDER=openai` uses the OpenAI Responses API with the Jenkins
-  Secret Text credential `AI_TRIAGE_CREDENTIAL_ID` (default `openai-api-key`).
+- `AI_TRIAGE_PROVIDER=openai` uses the OpenAI API (native function calling) with the Jenkins
+  Secret Text credential `AI_TRIAGE_CREDENTIAL_ID` (default `openai-api-key`); the agent needs
+  the `openai` Python package. (`anthropic` works the same way with `ANTHROPIC_API_KEY`.)
 - `AI_TRIAGE_MODEL`: blank uses the provider's default model.
 - `AI_TRIAGE_MAX_FAILURES`: cap on AI calls; `0` analyzes every failure.
-- `AI_TRIAGE_MAX_STEPS`: tool steps per AI analysis (default 3); `0` answers at once.
-- `AI_TRIAGE_MODE`: `single` (default for the weekly jobs) or `skills` (default in
-  `riscv-uart-triage`), see below.
-
-## Skill-driven investigation (`AI_TRIAGE_MODE=skills`)
-
-The AI works like a verification engineer instead of answering one large question. It uses
-debugging skills, `skills/<name>.md` (instructions) plus `skills.py` (the evidence each skill
-contributes, with ids such as `spec.2`):
-
-| Skill | Evidence |
-|---|---|
-| `log` | failed check, expected vs observed, trap cause/PC/tval, rule-based reading |
-| `instruction` | disassembly at the failing PC, test code at the check |
-| `csr_privilege` | value diff, measured absent CSRs and writable masks, sail.json settings |
-| `memory_mmu` | decoded satp/hgatp/vsatp and PTEs, fault kind, translation settings |
-| `reference` | what Sail did at the same instruction, and its setup |
-| `spec` | passages of the spec versions the board implements, normative rules |
-| `act_framework` | test header, the board's RVMODEL macros, ACT revision |
-| `history` | vault notes, riscv-arch-test issues, earlier findings |
-
-Loop per failure signature: code loads the failure card (`log`, `instruction`) and the first
-skill of a default plan chosen from the failure (`skills.plan`: category, test name, trap
-cause); the model keeps competing hypotheses and, one reply at a time, loads the skill or
-runs the tool that best separates them, up to `AI_TRIAGE_MAX_STEPS`. Only loaded skills are
-in the question. The answer must cite evidence ids; an answer citing none, or a hardware bug,
-Inconclusive or low-confidence answer, is sent back once. `check_answer` drops ids the
-investigation did not produce, and DUT noncompliance also needs cited spec evidence. The
-report keeps the steps (`investigation`) and the cited evidence (`evidence`).
-
-Compare the modes with `EVALUATE=true` on the same build, once per mode.
-
-### Context engineering
-
-- **Context checks** (`validate_context.py`, the `environment` skill, run by code first): the
-  kept test.elf must match the size and CRC32 the runner logged for the ELF it received, the
-  runner's board must be the triaged board, Sail of the run's ACT revision and the board's
-  sail.json must be there, and the spec versions the board implements are listed. A MISMATCH
-  is evidence: an answer built on a different ELF is low confidence and cannot be DUT
-  noncompliance.
-- **Structured hypotheses**: every skill-mode reply lists hypotheses with status
-  (open / confirmed / ruled_out) and the evidence ids for and against. `check_answer` wants
-  exactly one confirmed hypothesis, supported by investigation evidence and contradicted by
-  none; an alternative left open caps confidence at medium.
-- **Primary instruction** (`agent.TRIAGE_SYSTEM`): a fixed triage-engineer role, sent as the
-  system instructions (OpenAI) or ahead of the question (Codex).
-- **Revision-keyed memory**: AI answers are stored with the runner build, ACT commit, Sail
-  version and spec versions, and reused only for the same ACT commit, Sail version and spec
-  versions (people's verdicts and rule answers are reused as before).
-- **No silent truncation**: long evidence items are shown capped with a marker, and the model
-  can `expand <id>` to see one whole.
-
-If the AI cannot run (no `codex`, not logged in, no key), the job says why and
-runs deterministic triage only. `ci/triage/jenkins_triage.sh` holds that logic
-for every job.
+- `AI_TRIAGE_MAX_STEPS`: tool calls of the ReAct agent per failure signature (default 12).
 
 ## Manual use
 

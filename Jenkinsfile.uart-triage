@@ -9,7 +9,7 @@ pipeline {
     options {
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
-        timeout(time: 2, unit: 'HOURS')
+        timeout(time: 6, unit: 'HOURS')
         timestamps()
         skipDefaultCheckout(true)
     }
@@ -33,10 +33,8 @@ pipeline {
             description: 'Model name; blank uses the provider default.')
         string(name: 'AI_TRIAGE_CREDENTIAL_ID', defaultValue: 'openai-api-key',
             description: 'Jenkins Secret Text credential with an OpenAI API key (openai provider only).')
-        choice(name: 'AI_TRIAGE_MODE', choices: ['skills', 'single'],
-            description: 'skills: the AI investigates like an engineer, loading debugging skills (log, instruction, CSR and privilege, memory and MMU, Sail reference, spec, ACT framework, history) one step at a time and citing the evidence ids. single: one evidence-rich question.')
-        string(name: 'AI_TRIAGE_MAX_STEPS', defaultValue: '4',
-            description: 'Skill loads or tool runs the AI may take per failure signature (each is one more AI request); 0 answers at once.')
+        string(name: 'AI_TRIAGE_MAX_STEPS', defaultValue: '12',
+            description: 'Tool calls the ReAct triage agent may make per failure signature (each is one AI request) before its answer is forced.')
         string(name: 'AI_TRIAGE_MAX_FAILURES', defaultValue: '0',
             description: 'Maximum failed cases sent for AI analysis; 0 means every failure.')
         booleanParam(name: 'REFRESH_MEMORY', defaultValue: false,

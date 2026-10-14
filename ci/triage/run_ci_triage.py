@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Run deterministic and optional AI triage for a weekly UART result directory."""
+"""Run deterministic triage and the ReAct triage agent (ci/triage/agentic) for a UART result directory."""
 
 from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
-from ci_triage import AI_PROVIDERS, AIConfig, run_triage
+# A package import: the ReAct agent (ci/triage/agentic) uses relative imports.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from ci.triage.ci_triage import AIConfig, run_triage  # noqa: E402
 
 
 def main() -> int:
@@ -20,9 +23,9 @@ def main() -> int:
     parser.add_argument("--ai", action="store_true", help="enable advisory AI analysis")
     parser.add_argument(
         "--provider",
-        choices=sorted(AI_PROVIDERS),
+        choices=["anthropic", "codex", "openai"],
         default=os.environ.get("AI_TRIAGE_PROVIDER") or "codex",
-        help="codex: the Codex CLI logged in with a ChatGPT account; openai: OPENAI_API_KEY",
+        help="codex: the Codex CLI logged in with a ChatGPT account; openai / anthropic: API key and SDK",
     )
     parser.add_argument(
         "--model",
@@ -31,21 +34,13 @@ def main() -> int:
     )
     parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
     parser.add_argument(
-        "--endpoint",
-        default=os.environ.get("OPENAI_RESPONSES_ENDPOINT", "https://api.openai.com/v1/responses"),
-    )
-    parser.add_argument(
         "--max-ai-failures",
         type=int,
         default=0,
         help="maximum AI-analyzed failures; 0 analyzes every failure",
     )
-    parser.add_argument("--max-steps", type=int, default=int(os.environ.get("AI_TRIAGE_MAX_STEPS", "3")),
-                        help="tool steps the AI may take to test its hypothesis; 0 answers at once")
-    parser.add_argument("--mode", choices=["single", "skills"],
-                        default=os.environ.get("AI_TRIAGE_MODE") or "single",
-                        help="single: one evidence-rich question; skills: skill-driven investigation")
-    parser.add_argument("--timeout", type=int, default=300, help="seconds per AI request")
+    parser.add_argument("--max-steps", type=int, default=int(os.environ.get("AI_TRIAGE_MAX_STEPS") or "12"),
+                        help="tool calls the ReAct agent may make per failure signature")
     parser.add_argument(
         "--memory",
         default=os.environ.get("TRIAGE_MEMORY_DB", ""),
@@ -68,11 +63,8 @@ def main() -> int:
         ai_config=AIConfig(
             model=args.model,
             provider=args.provider,
-            endpoint=args.endpoint,
-            timeout_seconds=args.timeout,
             codex_bin=args.codex_bin,
             max_steps=args.max_steps,
-            mode=args.mode,
         ),
         api_key=os.environ.get("OPENAI_API_KEY", ""),
         max_ai_failures=args.max_ai_failures,

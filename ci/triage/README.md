@@ -227,6 +227,19 @@ model). Portal: SUCCESS maps to DUT noncompliance / Reference-model mismatch / T
 Environment issue, FAILED_TO_ISOLATE to Inconclusive; the next step shows
 `[remediation_type: target] directive`.
 
+**Historical issue memory** (`agentic/issue_memory_vault.py`): every riscv-arch-test issue
+(`knowledge/act_issues.json.gz`, open and closed) merged with the team's curated vault notes
+(a curated note wins) into one record each: `issue_number`, `status` (OPEN/CLOSED), `title`,
+`tags` (extensions, Sail/Spike/UDB/testgen, instructions, CSRs, tests), `symptom_pattern`,
+`root_cause_or_workaround`, plus url, cause and tests. The agent calls
+`tool_query_historical_issues(failure_keywords, hardware_tags, test_name)` (top 3; lexical
+TF-IDF with tag, same-test and curation boosts, weak matches dropped). The prompt lets it skip
+the deep Sail differential when an issue perfectly matches (OPEN framework/test bug ->
+Test_Suite_Error, OPEN Sail/reference bug -> UDB_Config_Mismatch), but code accepts such a
+SUCCESS only if it cites an issue the tool actually returned (ACT#N) whenever a Sail reference
+was available. `python3 -m ci.triage.agentic.issue_memory_vault query "..." --tag H` searches it
+by hand; `export FILE` writes the ingestion format.
+
 **Test intent and specification invariants** (`agentic/spec_alignment.py`): the first message
 also carries, between `[TEST INTENT]` / `[/TEST INTENT]` and `[SPECIFICATION INVARIANTS]` /
 `[/SPECIFICATION INVARIANTS]`:

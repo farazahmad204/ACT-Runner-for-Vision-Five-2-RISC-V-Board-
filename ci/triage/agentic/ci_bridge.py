@@ -57,7 +57,10 @@ def case_inputs(run_root: Path, record: dict[str, Any], profile: dict[str, Any])
         "log_path": str(log) if log.is_file() else None,
         # A kept ELF that is not the one the board ran is withheld (validate_context checked it).
         "elf_path": str(elf) if elf.is_file() and checks.get("elf_matches") is not False else None,
-        "sail_trace_path": str(run_root / "triage" / "sail_traces" / f"{folder.name}.sig.trace"),
+        # Only when a Sail reference can be run for this case (its Sail ELF and the board's sail.json).
+        "sail_trace_path": (str(run_root / "triage" / "sail_traces" / f"{folder.name}.sig.trace")
+                            if (folder / "test.sig.elf").is_file()
+                            and (run_root / "act" / "config" / "sail.json").is_file() else None),
         "isa": profile.get("implemented_isa") or "",
         "test_source_path": str(folder / "test.S") if (folder / "test.S").is_file() else None,
         "context_checks": [n for n in notes if n.startswith(("MISMATCH", "UNCHECKED"))],

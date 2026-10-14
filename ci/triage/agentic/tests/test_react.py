@@ -127,3 +127,25 @@ class ReactLoopTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuotaTests(unittest.TestCase):
+    MESSAGE = ("ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit "
+               "https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 15th, 2026 "
+               "3:12 AM.")
+
+    def test_usage_limit_is_recognised_with_its_retry_time(self):
+        with self.assertRaises(agent.QuotaExhausted) as caught:
+            agent.raise_if_quota(self.MESSAGE)
+        self.assertEqual(caught.exception.retry_at, "Oct 15th, 2026 3:12 AM")
+        agent.raise_if_quota("rc=1: some other failure")  # not a quota problem: no exception
+
+    def test_codex_backend_raises_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d) / "codex"
+            fake.write_text("#!/bin/sh\necho " + repr(self.MESSAGE) + " >&2\nexit 1\n")
+            fake.chmod(0o755)
+            backend = agent.CodexBackend("", agent.CaseState(Path(d) / "s.json", "x"), str(fake))
+            backend.start("S", "U")
+            with self.assertRaises(agent.QuotaExhausted):
+                backend.next(force_final=False)

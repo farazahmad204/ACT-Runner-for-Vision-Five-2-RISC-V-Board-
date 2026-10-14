@@ -29,7 +29,7 @@ try:
     from . import casefile, vault
     from . import spec as spec_index
     from . import validate_context
-    from .agentic import ci_bridge
+    from .agentic import ci_bridge, react
 except ImportError:  # run as a script from ci/triage
     from context import (  # type: ignore[no-redef]
         declared_isa, issue_terms, norms, query_terms, related_issues, spec_passages, test_source,
@@ -592,8 +592,13 @@ def run_triage(
     board_versions = {role: spec_index.label(vid)
                       for role, vid in (knowledge.get("spec_versions") or {}).items() if role != "source"}
     profile = ci_bridge.board_profile(run_root, board) if pending and ai_enabled else {}
+    quota: str = ""  # the provider's usage-limit message, once it refuses
     for signature, members in pending.items():
         if not ai_enabled:
+            continue
+        if quota:  # no more requests this run: they would all be refused
+            for member in members:
+                member.update(ai_status="SKIPPED_QUOTA", ai_error=quota)
             continue
         if max_ai_failures > 0 and ai_calls >= max_ai_failures:
             for member in members:
@@ -618,6 +623,12 @@ def run_triage(
                 member.update(analysis=answer, source=source, ai_status="SUCCESS", metadata=metadata)
                 memory.remember(board, signature, member["evidence"]["case"], "ai",
                                 lead["deterministic_category"], answer, run_label)
+        except react.QuotaExhausted as exc:
+            quota = f"AI quota exhausted ({ai_config.provider})" + (f"; retry at {exc.retry_at}" if exc.retry_at
+                                                                     else "") + f": {exc.message[:600]}"
+            print(f"AI triage stopped: {quota}", flush=True)
+            for member in members:
+                member.update(ai_status="SKIPPED_QUOTA", ai_error=quota)
         except Exception as exc:  # Keep AI advisory and non-blocking.
             for member in members:
                 member.update(ai_status="ERROR", ai_error=str(exc)[:1000])
@@ -667,7 +678,8 @@ def run_triage(
             }
         )
     counts = {status: sum(1 for r in results if r["ai_status"] == status)
-              for status in ("VAULT", "MEMORY", "RULE", "SUCCESS", "ERROR", "SKIPPED_LIMIT", "DISABLED")}
+              for status in ("VAULT", "MEMORY", "RULE", "SUCCESS", "ERROR", "SKIPPED_LIMIT", "SKIPPED_QUOTA",
+                             "DISABLED")}
 
     summary = {
         "schema_version": 1,
@@ -682,6 +694,7 @@ def run_triage(
         "max_ai_failures": max_ai_failures,
         "signatures": len({r["signature"] for r in results}),
         "ai_calls": ai_calls,
+        "ai_quota": quota,  # the provider's usage-limit message when it stopped the AI, else ""
         "resolved": counts,
         "memory_db": memory.path,
         "blind": blind,
@@ -703,6 +716,8 @@ def run_triage(
         f"- Distinct failure signatures: `{summary['signatures']}`",
         f"- Explained by known issues (vault): `{counts['VAULT']}`, from memory: `{counts['MEMORY']}`, by board rules: `{counts['RULE']}`, "
         f"by AI: `{counts['SUCCESS']}` with `{ai_calls}` AI call(s)",
+        *([f"- **AI stopped:** {quota} ({counts['SKIPPED_QUOTA']} failure(s) not analyzed; rerun the "
+           "triage job after the reset)"] if quota else []),
         "",
         "| Case | Category | Preliminary owner | AI | Reports |",
         "|---|---|---|---|---|",

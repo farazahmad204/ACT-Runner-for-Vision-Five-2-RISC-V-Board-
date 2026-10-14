@@ -216,6 +216,8 @@ def benchmark(backend: str, model: str, runs: int, codex_bin: str, max_steps: in
                 report, state = investigate(scenario, out, backend_name=backend, model=model, max_steps=max_steps,
                                             codex_bin=codex_bin)
                 row = score(scenario, report, state)
+            except react.QuotaExhausted:
+                raise  # nothing can be measured until the quota resets
             except Exception as exc:  # a run that cannot complete counts as wrong
                 row = {"scenario": scenario, "status": f"ERROR {type(exc).__name__}: {str(exc)[:80]}",
                        "class_ok": False, "fix_ok": False, "hdl_leak": False, "schema_ok": False, "steps": 0,
@@ -255,7 +257,12 @@ def main() -> int:
     args, rest = parser.parse_known_args()
     if not args.live:
         return 0 if unittest.main(argv=[sys.argv[0], *rest], exit=False).result.wasSuccessful() else 1
-    rows = benchmark(args.backend, args.model, args.runs, args.codex_bin, args.max_steps, args.keep)
+    try:
+        rows = benchmark(args.backend, args.model, args.runs, args.codex_bin, args.max_steps, args.keep)
+    except react.QuotaExhausted as exc:
+        print(f"Benchmark stopped: the {args.backend} usage limit is reached"
+              + (f"; try again at {exc.retry_at}" if exc.retry_at else "") + f".\n  {exc.message}")
+        return 2
     table, accuracy = summary(rows)
     print("\n" + table)
     return 0 if accuracy >= args.min_accuracy else 1

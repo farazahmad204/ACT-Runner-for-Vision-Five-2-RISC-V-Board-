@@ -209,6 +209,10 @@ def main(argv: list[str] | None = None) -> int:
                                  args.max_steps, hardware=context["hardware"], profile=context["profile"],
                                  codex_bin=args.codex_bin, alignment=context["alignment"])
         report_schema.parse_report(report, context["profile"])
+    except react.QuotaExhausted as exc:
+        print(f"triage_suite: the AI provider refused ({args.backend} usage limit)"
+              + (f"; try again at {exc.retry_at}" if exc.retry_at else "") + f":\n  {exc.message}", file=sys.stderr)
+        return 3
     except report_schema.SchemaError as exc:
         print(f"triage_suite: the report does not match the schema: {exc}", file=sys.stderr)
         return 3

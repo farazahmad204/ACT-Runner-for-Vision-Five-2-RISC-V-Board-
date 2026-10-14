@@ -79,6 +79,9 @@ def main() -> int:
         f"ai_calls={summary['ai_calls']} ai_enabled={summary['ai_enabled']} "
         f"output={args.run_root.resolve() / 'triage'}"
     )
+    if summary.get("ai_quota"):
+        print(f"WARNING: {summary['ai_quota']}\n  {summary['resolved'].get('SKIPPED_QUOTA', 0)} failure(s) were "
+              "not analyzed by the AI; rerun riscv-uart-triage for this build after the reset.")
     return 0
 
 

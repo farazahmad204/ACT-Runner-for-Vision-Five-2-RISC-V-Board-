@@ -217,6 +217,26 @@ def build_user_payload(case: str, inputs: dict, max_steps: int, hardware: str = 
     return "\n\n".join(parts)
 
 
+class QuotaExhausted(RuntimeError):
+    """The model provider refuses further requests (usage limit / quota); retrying now is useless.
+    `message` is the provider's full text, `retry_at` when it says to try again (if it does)."""
+
+    def __init__(self, message: str):
+        self.message = " ".join(message.split())
+        found = re.search(r"try again (?:at|in|after) ([^.]+?)(?:\.|$)", self.message, re.I)
+        self.retry_at = found.group(1).strip() if found else ""
+        super().__init__(self.message)
+
+
+QUOTA_TEXT = re.compile(r"usage limit|hit your .*limit|quota|insufficient_quota|rate limit exceeded|"
+                        r"purchase more credits|explore/pro", re.I)
+
+
+def raise_if_quota(text: str) -> None:
+    if text and QUOTA_TEXT.search(text):
+        raise QuotaExhausted(text[-1500:])
+
+
 @dataclass
 class ToolCall:
     name: str
@@ -259,8 +279,12 @@ class OpenAIBackend:
 
     def next(self, force_final: bool) -> Turn:
         choice = {"type": "function", "function": {"name": "submit_analysis"}} if force_final else "auto"
-        reply = self.client.chat.completions.create(model=self.model, messages=self.messages, tools=self.tools,
-                                                    tool_choice=choice).choices[0].message
+        try:
+            reply = self.client.chat.completions.create(model=self.model, messages=self.messages, tools=self.tools,
+                                                        tool_choice=choice).choices[0].message
+        except Exception as exc:  # the SDK's quota/rate errors become QuotaExhausted
+            raise_if_quota(f"{type(exc).__name__}: {exc}")
+            raise
         self.messages.append(reply.model_dump(exclude_none=True))
         calls = [ToolCall(c.function.name, json.loads(c.function.arguments or "{}"), c.id)
                  for c in reply.tool_calls or []]
@@ -289,8 +313,12 @@ class AnthropicBackend:
             self.messages.append({"role": "user", "content": self.pending})
             self.pending = []
         choice = {"type": "tool", "name": "submit_analysis"} if force_final else {"type": "auto"}
-        reply = self.client.messages.create(model=self.model, max_tokens=4096, system=self.system,
-                                            messages=self.messages, tools=self.tools, tool_choice=choice)
+        try:
+            reply = self.client.messages.create(model=self.model, max_tokens=4096, system=self.system,
+                                                messages=self.messages, tools=self.tools, tool_choice=choice)
+        except Exception as exc:
+            raise_if_quota(f"{type(exc).__name__}: {exc}")
+            raise
         self.messages.append({"role": "assistant", "content": [b.model_dump() for b in reply.content]})
         thought = " ".join(b.text for b in reply.content if b.type == "text")
         calls = [ToolCall(b.name, dict(b.input), b.id) for b in reply.content if b.type == "tool_use"]
@@ -348,6 +376,7 @@ class CodexBackend:
                                  cwd=root / "work")
             answer = root / "answer.json"
             if out.returncode != 0 or not answer.is_file():
+                raise_if_quota((out.stderr or "") + (out.stdout or ""))
                 raise RuntimeError(f"codex failed (rc={out.returncode}): {(out.stderr or '')[-300:]}")
             reply = json.loads(answer.read_text())
         try:

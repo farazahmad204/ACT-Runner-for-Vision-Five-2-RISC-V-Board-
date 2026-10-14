@@ -261,6 +261,21 @@ runs the agent, writes `triage_out/triage_report.json` (validated) and `agent_st
 prints a markdown summary. Exit 0 isolated, 1 FAILED_TO_ISOLATE, 2 bad input, 3 the agent could
 not run. `--dry-run` prints the assembled first message without calling a model.
 
+### Multi-board regression (`agentic/tests/test_triage_agent_matrix.py`)
+
+One failure (`mul` raising illegal instruction on a core that implements M), two boards: a
+soft-core RV32 Ibex on an FPGA must get `DUT_RTL_Bug` + `RTL_PATCH` naming an HDL file; the
+VisionFive 2 U74 (hard macro) must get `DUT_RTL_Bug` + `FIRMWARE_WORKAROUND` with no HDL change.
+Run with pytest (deterministic, no model: context per board, fix by profile, an RTL patch refused
+on silicon and corrected) or as a benchmark of the real agent:
+
+```bash
+python3 ci/triage/agentic/tests/test_triage_agent_matrix.py --live --backend codex --runs 3 [--keep DIR]
+```
+
+It prints one JSON row per run and a table (classification, remediation type, HDL leakage on the
+hard macro, schema validity, steps, rejections) and exits 1 below `--min-accuracy` (0.8).
+
 ## AI analysis
 
 With `RUN_AI_TRIAGE` (default on) every failed case also gets an AI analysis: a

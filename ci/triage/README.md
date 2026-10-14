@@ -203,14 +203,29 @@ explain are investigated by a ReAct agent, once per failure signature
    checks, else it is sent back. Mapped to the report: DUT noncompliance, Reference-model
    mismatch, Test issue, Inconclusive; a hardware bug without a spec search is low confidence.
 
-**Two tiers in every answer.** `tier1_root_cause`: the invariant, the diverging instruction and
-its PC, Sail's instruction step there (the board has no cycle trace), board vs expected with
-values, and the inferred sub-component. `tier2_remediation` (`fix_kind`, `target`, `directive`)
-is bounded by the profile's `core_type` (`board_knowledge/<board>.yaml`): on a `hard_macro`
-(the three boards: fixed silicon) or an unknown core an RTL fix is rejected and the agent must
-give a firmware, bootloader, runner, compiler, test, reference/board configuration change or a
-vendor erratum; on a `soft_core` with an `rtl_source`, an RTL fix must name the HDL module file.
-The portal's next step shows `[fix_kind: target] directive`.
+**The triage report** (`agentic/report_schema.py`): `submit_analysis` must return exactly
+
+```json
+{"triage_status": "SUCCESS | FAILED_TO_ISOLATE", "target_board": "<profile board>",
+ "failure_classification": "DUT_RTL_Bug | UDB_Config_Mismatch | Test_Suite_Error | Environment_Flake",
+ "tier_1_root_cause": {"failing_pc": "0x...", "failing_instruction": "...", "architectural_symptom": "...",
+                       "divergence_cycle": "Sail step (int) or \"not traceable\""},
+ "tier_2_board_specific_remediation": {"remediation_type": "RTL_PATCH | FIRMWARE_WORKAROUND |
+     TOOLCHAIN_FLAGS_UPDATE | CONFIG_REMAP", "target_repository_or_file": "...", "actionable_fix_directive": "..."}}
+```
+
+The same schema is the tool schema for OpenAI (strict), Anthropic and Codex, and every payload is
+validated in plain Python (no pydantic/jsonschema on the agent): types, enums, required keys, no
+extra keys, hex PC pattern, string-or-integer cycle. Rules the schema cannot express are checked
+too: `target_board` must be the profile's board; `RTL_PATCH` only on a `soft_core` with an
+`rtl_source` and naming an HDL file (`core_type` in `board_knowledge/<board>.yaml`; the three
+boards are `hard_macro`); a SUCCESS needs `failing_pc` and must agree with the architectural
+sanity checks. `failure_classification` may also be `Unclassified`, only with
+`FAILED_TO_ISOLATE`. An invalid report is sent back with the problems; the written
+`per_case/<case>/agent/triage_report.json` always validates (`parse_report` gives the typed
+model). Portal: SUCCESS maps to DUT noncompliance / Reference-model mismatch / Test issue /
+Environment issue, FAILED_TO_ISOLATE to Inconclusive; the next step shows
+`[remediation_type: target] directive`.
 
 **Test intent and specification invariants** (`agentic/spec_alignment.py`): the first message
 also carries, between `[TEST INTENT]` / `[/TEST INTENT]` and `[SPECIFICATION INVARIANTS]` /

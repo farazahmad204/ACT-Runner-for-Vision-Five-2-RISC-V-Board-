@@ -116,8 +116,7 @@ class TriageMemory:
         keep = {k: analysis[k] for k in
                 ("failure_reason", "root_cause", "confidence", "next_step", "verdict", "confirmed_by",
                  "classification", "suggested_verdict", "spec_version", "spec_quote", "spec_check",
-                 "known_issue", "revisions", "evidence", "hypotheses", "tier1_root_cause",
-                 "tier2_remediation")
+                 "known_issue", "revisions", "evidence", "hypotheses", "triage_report")
                 if analysis.get(k)}
         self.conn.execute(
             "INSERT INTO analyses (board, signature, test, source, category, analysis, "

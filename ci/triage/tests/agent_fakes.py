@@ -6,10 +6,12 @@ import json
 
 from ci.triage.agentic import react
 
-FINAL = {"analysis_status": "COMPLETED", "failure_classification": "Test_Suite_Error",
-         "symptom_isolation": "x", "identified_root_cause": "trap delegation differs",
-         "reproduction_steps_or_fix": "z", "tier1_root_cause": {"invariant": "", "instruction": "", "pc": "", "sail_step": "", "divergence": "", "subcomponent": ""},
-         "tier2_remediation": {"fix_kind": "test", "target": "x.S", "directive": "relax the check"}}
+FINAL = {"triage_status": "SUCCESS", "target_board": "vf2_jh7110", "failure_classification": "Test_Suite_Error",
+         "tier_1_root_cause": {"failing_pc": "0x80000a3c", "failing_instruction": "lw a0,1(zero)",
+                               "architectural_symptom": "trap delegation differs", "divergence_cycle": "not traceable"},
+         "tier_2_board_specific_remediation": {"remediation_type": "CONFIG_REMAP",
+                                               "target_repository_or_file": "tests/priv/x.S",
+                                               "actionable_fix_directive": "Relax the check."}}
 
 
 class Scripted:
@@ -35,7 +37,10 @@ class Factory:
         self.final, self.turns, self.backends = final or FINAL, list(turns), []
 
     def __call__(self, state):
-        backend = Scripted([*self.turns, react.Turn("conclude", [react.ToolCall("submit_analysis", self.final)])])
+        # The report names the board being triaged (the agent reads it from the profile).
+        board = (state.data.get("inputs") or {}).get("board") or self.final["target_board"]
+        final = {**self.final, "target_board": board}
+        backend = Scripted([*self.turns, react.Turn("conclude", [react.ToolCall("submit_analysis", final)])])
         self.backends.append(backend)
         return backend
 

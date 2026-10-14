@@ -48,3 +48,6 @@ docs/*.png
 docs/*.svg
 /tools/*
 !/tools/skills/
+
+# Test fixture binaries (small, built from the fixture sources) are part of the tests.
+!ci/triage/agentic/tests/fixtures/**/*.elf

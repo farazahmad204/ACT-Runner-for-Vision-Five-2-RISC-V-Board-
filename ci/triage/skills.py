@@ -28,8 +28,9 @@ except ImportError:  # run as a script from ci/triage
     import sail_trace  # type: ignore[no-redef]
 
 SKILL_DIR = Path(__file__).resolve().parent / "skills"
-CARD = ("log", "instruction")  # always loaded: the failure card
-ITEM_CHARS = 700
+CARD = ("environment", "log", "instruction")  # always loaded: context checks and the failure card
+ITEM_CHARS = 700  # shown per evidence item; `expand <id>` shows it whole
+FULL_CHARS = 6000  # an item's stored length
 CAUSES = {0: "instruction address misaligned", 1: "instruction access fault", 2: "illegal instruction",
           3: "breakpoint", 4: "load address misaligned", 5: "load access fault",
           6: "store/AMO address misaligned", 7: "store/AMO access fault", 8: "ecall from U/VU",
@@ -173,6 +174,7 @@ class SkillContext:
     grounding: dict[str, Any]
     knowledge: dict[str, Any]
     related: list[str] = field(default_factory=list)
+    environment: list[str] = field(default_factory=list)  # validate_context.check()["items"]
 
 
 def _cap(text: str, limit: int = ITEM_CHARS) -> str:
@@ -185,7 +187,9 @@ def items_for(name: str, ctx: SkillContext) -> list[str]:
     ev, cf, g, k = ctx.evidence, ctx.case_file, ctx.grounding, ctx.knowledge
     ex = ev.get("extracted", {})
     items: list[str] = []
-    if name == "log":
+    if name == "environment":
+        items += ctx.environment or ["No context checks were run."]
+    elif name == "log":
         if ex.get("failure") or ex.get("test_info"):
             items.append(f"Failed check: {ex.get('failure') or ex.get('test_info')}")
         pairs = [("expected_value", "actual_value", "Signature value"),
@@ -273,5 +277,11 @@ def items_for(name: str, ctx: SkillContext) -> list[str]:
             items.append("Earlier findings for the same category:\n" + "\n".join(ctx.related))
         if not items:
             items.append("No reported issue or earlier finding matches this failure.")
-    limit = 1500 if name in ("instruction", "reference", "spec") else ITEM_CHARS
-    return [_cap(item, limit) for item in items if item]
+    return [_cap(item, FULL_CHARS) for item in items if item]
+
+
+def shown(item: str, key: str, expanded: bool = False) -> str:
+    """An evidence item as the question shows it: capped unless the model expanded it."""
+    limit = FULL_CHARS if expanded else (1500 if key.split(".")[0] in ("instruction", "reference", "spec")
+                                        else ITEM_CHARS)
+    return item if len(item) <= limit else item[:limit - 1] + f"… [truncated: action expand, argument {key}]"

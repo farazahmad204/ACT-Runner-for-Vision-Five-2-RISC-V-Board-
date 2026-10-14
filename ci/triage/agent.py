@@ -254,6 +254,9 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
         + (" ..." if len(members) > 6 else "") + ".",
         cap("Board facts (verified): " + " ".join(knowledge.get("facts") or ["none recorded"]), 900),
     ]
+    if g.get("environment"):
+        parts.append(cap("Context checks (by code; a MISMATCH means that evidence may describe another "
+                         "build):\n" + "\n".join(g["environment"]), 900))
     if g.get("isa"):
         parts.append(cap(g["isa"], 900))
     parts.append(cap("Rule-based reading: " + rep.get("deterministic_explanation", ""), 450))
@@ -309,6 +312,17 @@ def compact_prompt(rep: dict[str, Any], members: list[str], knowledge: dict[str,
                          + "\n".join(related), 700))
     body = "\n\n".join(parts)[:MAX_PROMPT_CHARS]
     return body + "\n\n" + analysis_instructions()
+
+
+TRIAGE_SYSTEM = (
+    "You are the primary triage engineer for RISC-V architectural compliance (ACT) failures on real "
+    "hardware. You find the root cause of each failure from evidence, the way a verification engineer "
+    "does: check the context can be trusted, observe what failed, understand the failing instruction "
+    "and what the test expects, compare the board with the reference model, and decide with the "
+    "specification version the board implements. ACT, Sail and the board can each be wrong. You "
+    "separate measured facts from assumptions, cite evidence for every claim, never change a "
+    "PASS/FAIL result, and say Inconclusive when the evidence cannot decide."
+)
 
 
 def analysis_instructions() -> str:
@@ -380,6 +394,41 @@ def claims_hardware_bug(text: str) -> bool:
                for m in HW_BUG.finditer(text))
 
 
+def lower(answer: dict[str, Any], ceiling: str) -> None:
+    """Cap the answer's confidence at `ceiling` (high > medium > low)."""
+    order = ["low", "medium", "high"]
+    if order.index(answer.get("confidence") if answer.get("confidence") in order else "low") > order.index(ceiling):
+        answer["confidence"] = ceiling
+
+
+def check_hypotheses(answer: dict[str, Any], evidence_ids: set[str]) -> list[str]:
+    """Skill mode: the root cause is the one confirmed hypothesis, supported by evidence the
+    investigation produced and contradicted by none; alternatives left open limit confidence."""
+    hypotheses = [h for h in answer.get("hypotheses") or [] if isinstance(h, dict)]
+    if not hypotheses:
+        lower(answer, "medium")
+        return ["no competing hypotheses were stated"]
+    notes = []
+    confirmed = [h for h in hypotheses if h.get("status") == "confirmed"]
+    if len(confirmed) != 1:
+        lower(answer, "low")
+        notes.append(f"{len(confirmed)} hypotheses confirmed; exactly one should be")
+    for h in confirmed:
+        support = [i for i in h.get("supported_by") or [] if i in evidence_ids]
+        against = [i for i in h.get("contradicted_by") or [] if i in evidence_ids]
+        if not support:
+            lower(answer, "low")
+            notes.append("the confirmed hypothesis cites no supporting evidence")
+        if against:
+            lower(answer, "low")
+            notes.append("the confirmed hypothesis is contradicted by " + ", ".join(against[:4]))
+    still_open = [h for h in hypotheses if h.get("status") == "open"]
+    if still_open and confirmed:
+        lower(answer, "medium")
+        notes.append(f"{len(still_open)} alternative(s) not ruled out")
+    return notes
+
+
 def check_answer(answer: dict[str, Any], rep: dict[str, Any],
                  board_versions: dict[str, str] | None = None,
                  has_instruction: bool = False,
@@ -424,6 +473,11 @@ def check_answer(answer: dict[str, Any], rep: dict[str, Any],
         answer["spec_check"] = "not_found"
         answer["confidence"] = {"high": "medium"}.get(answer.get("confidence"), "low")
         notes.append(f"the quoted spec text is not in {version or 'the named version'}")
+    checks = rep.get("context_checks") or {}
+    if checks.get("elf_matches") is False:
+        answer["confidence"] = "low"
+        notes.append("the kept ELF is not the one the board received: instruction and Sail evidence may "
+                     "describe another build")
     cited: list[str] = []
     if evidence_ids is not None:
         given = [str(i) for i in answer.get("evidence_ids") or []]
@@ -436,6 +490,7 @@ def check_answer(answer: dict[str, Any], rep: dict[str, Any],
             answer["confidence"] = "low"
             notes.append("cites no evidence from the investigation")
         answer["evidence_ids"] = cited
+        notes += check_hypotheses(answer, evidence_ids)
     # The class must be one of ours, and the strong ones must be earned.
     klass = str(answer.get("classification") or "")
     if klass not in CLASSES:
@@ -450,6 +505,7 @@ def check_answer(answer: dict[str, Any], rep: dict[str, Any],
             ("a spec version the board implements",
              not board_versions or version in board_versions.values()),
             ("cited spec evidence", evidence_ids is None or any(i.startswith(("spec.", "tool.")) for i in cited)),
+            ("the ELF the board ran", checks.get("elf_matches") is not False),
         ) if not ok]
         if missing:
             klass = "Inconclusive"

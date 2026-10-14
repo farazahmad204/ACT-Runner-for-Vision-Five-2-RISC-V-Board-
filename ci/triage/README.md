@@ -248,6 +248,26 @@ report keeps the steps (`investigation`) and the cited evidence (`evidence`).
 
 Compare the modes with `EVALUATE=true` on the same build, once per mode.
 
+### Context engineering
+
+- **Context checks** (`validate_context.py`, the `environment` skill, run by code first): the
+  kept test.elf must match the size and CRC32 the runner logged for the ELF it received, the
+  runner's board must be the triaged board, Sail of the run's ACT revision and the board's
+  sail.json must be there, and the spec versions the board implements are listed. A MISMATCH
+  is evidence: an answer built on a different ELF is low confidence and cannot be DUT
+  noncompliance.
+- **Structured hypotheses**: every skill-mode reply lists hypotheses with status
+  (open / confirmed / ruled_out) and the evidence ids for and against. `check_answer` wants
+  exactly one confirmed hypothesis, supported by investigation evidence and contradicted by
+  none; an alternative left open caps confidence at medium.
+- **Primary instruction** (`agent.TRIAGE_SYSTEM`): a fixed triage-engineer role, sent as the
+  system instructions (OpenAI) or ahead of the question (Codex).
+- **Revision-keyed memory**: AI answers are stored with the runner build, ACT commit, Sail
+  version and spec versions, and reused only for the same ACT commit, Sail version and spec
+  versions (people's verdicts and rule answers are reused as before).
+- **No silent truncation**: long evidence items are shown capped with a marker, and the model
+  can `expand <id>` to see one whole.
+
 If the AI cannot run (no `codex`, not logged in, no key), the job says why and
 runs deterministic triage only. `ci/triage/jenkins_triage.sh` holds that logic
 for every job.

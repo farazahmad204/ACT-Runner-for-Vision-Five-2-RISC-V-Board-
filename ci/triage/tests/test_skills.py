@@ -35,7 +35,7 @@ def context(category="trap_cause_mismatch", case="ExceptionsSm-00", **ex) -> ski
 class PlanAndDecodeTests(unittest.TestCase):
     def test_every_skill_file_loads(self):
         names = set(skills.catalog())
-        self.assertEqual(names, {"log", "instruction", "csr_privilege", "memory_mmu", "reference", "spec",
+        self.assertEqual(names, {"environment", "log", "instruction", "csr_privilege", "memory_mmu", "reference", "spec",
                                  "act_framework", "history"})
         for meta in skills.catalog().values():
             self.assertTrue(meta["summary"] and meta["body"])
@@ -75,7 +75,7 @@ class SkillLoopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             text, _raw, steps, found = investigate_skills("HEADER", context(), ask, self.toolbox(Path(d)), 3,
                                                           "RULES")
-        self.assertEqual(steps[0]["argument"], "log, instruction, memory_mmu")
+        self.assertEqual(steps[0]["argument"], "environment, log, instruction, memory_mmu")
         self.assertIn("## Skill: Log debugging (log)", prompts[0])
         self.assertNotIn("## Skill: Specification research", prompts[0])  # on demand only
         self.assertIn("Suggested next, in order: reference", prompts[0])
@@ -96,6 +96,44 @@ class SkillLoopTests(unittest.TestCase):
         self.assertEqual(len(prompts), 2)
         self.assertEqual(steps[-1]["tool"], "challenge")
         self.assertIn("not accepted because it cites no evidence id", prompts[1])
+
+    def test_truncated_evidence_can_be_expanded(self):
+        ctx = context()
+        ctx.grounding["spec_versions"] = "This board implements: priv-1.11\n[priv-1.11] Long passage:\n" + "x " * 2000
+        prompts = []
+        replies = iter([reply("skill", "spec"), reply("expand", "spec.2"), reply("answer", ids=["spec.2"])])
+
+        def ask(prompt):
+            prompts.append(prompt)
+            return next(replies), {}
+
+        with tempfile.TemporaryDirectory() as d:
+            investigate_skills("H", ctx, ask, self.toolbox(Path(d)), 4, "R")
+        self.assertIn("[truncated: action expand, argument spec.2]", prompts[1])
+        self.assertNotIn("[truncated: action expand, argument spec.2]", prompts[2])
+
+    def test_hypotheses_decide_the_confidence(self):
+        rep = {"extracted": {"expected_cause": "0x4", "actual_cause": "0x5"}}
+        ids = {"log.1", "spec.1", "reference.1"}
+        base = {**ANSWER, "confidence": "high", "evidence_ids": ["log.1"]}
+        good = check_answer({**base, "hypotheses": [
+            {"text": "priority is implementation-defined", "status": "confirmed", "supported_by": ["spec.1"],
+             "contradicted_by": []},
+            {"text": "PMP denies the access", "status": "ruled_out", "supported_by": [],
+             "contradicted_by": ["reference.1"]}]}, rep, evidence_ids=ids)
+        self.assertEqual(good["confidence"], "high")
+        open_alt = check_answer({**base, "hypotheses": [
+            {"text": "a", "status": "confirmed", "supported_by": ["spec.1"], "contradicted_by": []},
+            {"text": "b", "status": "open", "supported_by": [], "contradicted_by": []}]}, rep, evidence_ids=ids)
+        self.assertEqual(open_alt["confidence"], "medium")
+        contradicted = check_answer({**base, "hypotheses": [
+            {"text": "a", "status": "confirmed", "supported_by": ["spec.1"], "contradicted_by": ["log.1"]}]},
+            rep, evidence_ids=ids)
+        self.assertEqual(contradicted["confidence"], "low")
+        self.assertIn("contradicted by log.1", contradicted["checked"])
+        mismatch = check_answer(dict(base), {**rep, "context_checks": {"elf_matches": False}})
+        self.assertEqual(mismatch["confidence"], "low")
+        self.assertIn("not the one the board received", mismatch["checked"])
 
     def test_check_answer_holds_citations_to_the_investigation(self):
         rep = {"extracted": {"expected_cause": "0x4", "actual_cause": "0x5", "instruction": "0x00102503"}}

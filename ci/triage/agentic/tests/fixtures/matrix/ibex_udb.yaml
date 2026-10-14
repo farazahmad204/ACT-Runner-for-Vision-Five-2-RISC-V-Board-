@@ -1,0 +1,12 @@
+kind: architecture configuration
+name: ibex_arty_a7
+description: lowRISC Ibex on an Arty A7 FPGA.
+implemented_extensions:
+  - { name: I, version: "= 2.1" }
+  - { name: M, version: "= 2.0" }
+  - { name: C, version: "= 2.0" }
+  - { name: Zicsr, version: "= 2.0" }
+  - { name: U, version: "= 1.0.0" }
+  - { name: Sm, version: "= 1.12.0" }
+params:
+  MXLEN: 32

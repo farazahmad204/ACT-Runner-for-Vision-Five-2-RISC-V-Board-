@@ -1,0 +1,10 @@
+[UART_STREAM] READY version=1 header_bytes=88 board=matrix runner_build=matrix-fixture
+[CASE] START name=MExt_mul-00
+RVCP: Failure: "Unexpected trap: illegal instruction on mul"
+RVCP: Test Info: "test: 1; cg: MExt_cg; bin: cp_mul_basic_b0"
+RVCP: MCAUSE: 0x0000000000000002
+RVCP: MEPC: 0x0000000080000008
+RVCP: MTVAL: 0x0000000002b50633
+RVCP-SUMMARY: TEST FAILED - Test File "MExt_mul-00.S"
+[CASE] REPORT name=MExt_mul-00
+[UART_STREAM] DONE name=MExt_mul-00 status=FAIL tohost=0x0000000000000003

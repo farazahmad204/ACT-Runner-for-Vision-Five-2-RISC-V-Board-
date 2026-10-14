@@ -29,8 +29,8 @@ pipeline {
             description: 'Power-cycle BPI-F3 and stream the focused sanity ELF set over UART.')
         string(name: 'SERIAL_DEV', defaultValue: '/dev/ttyCI-bpif3',
             description: 'BPI-F3 USB-UART device path.')
-        string(name: 'POWER_DEVICE_NAME', defaultValue: 'SCW1050',
-            description: 'BPI-F3 smart-outlet name in devices.json.')
+        string(name: 'POWER_DEVICE_NAME', defaultValue: 'MELECTRO:3',
+            description: 'BPI-F3 smart-outlet name in devices.json, <name>:<socket> for a strip outlet.')
         string(name: 'INSTALLED_RUNNER_BUILD', defaultValue: '',
             description: 'Optional override; blank uses ci/runner_inventory.json.')
         string(name: 'UART_READY_TIMEOUT', defaultValue: '240',
@@ -60,7 +60,7 @@ pipeline {
         LOCAL_TUYA_DEVICES_SOURCE = '/data/ci/devices.json'
         REGENERATE_TESTS = 'true'
         INSTALLED_RUNNER_BUILD = "${params.INSTALLED_RUNNER_BUILD ?: ''}"
-        UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'SCW1050'}"
+        UART_DEVICE_NAME = "${params.POWER_DEVICE_NAME ?: 'MELECTRO:3'}"
         PATH = '/data/ci/bin:/data/ci/toolchains/riscv64/bin:/usr/local/bin:/usr/bin:/bin'
     }
 

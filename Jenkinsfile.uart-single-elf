@@ -118,19 +118,12 @@ pipeline {
                             sh 'ci/jenkins/single_elf_uart.sh run'
                         }
                     }
-                    if (params.TARGET_BOARD == 'milkv-megrez') {
-                        // SCW1050 powers the Megrez and is also the BPI-F3 and VF2 outlet:
-                        // hold all three board locks, like the Megrez sanity and weekly jobs.
-                        lock(resource: 'vf2-hardware') {
-                            lock(resource: 'bpif3-hardware') {
-                                lock(resource: 'megrez-hardware') { execute() }
-                            }
-                        }
-                    } else {
-                        def hardwareLock = params.TARGET_BOARD == 'bananapi-f3' ?
-                            'bpif3-hardware' : 'vf2-hardware'
-                        lock(resource: hardwareLock) { execute() }
-                    }
+                    // Each board has its own socket on the power strip: lock only that board.
+                    def hardwareLock = [
+                        'milkv-megrez': 'megrez-hardware',
+                        'bananapi-f3': 'bpif3-hardware',
+                    ].get(params.TARGET_BOARD, 'vf2-hardware')
+                    lock(resource: hardwareLock) { execute() }
                 }
             }
         }

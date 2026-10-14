@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import fcntl
 import os
 import sys
 import time
@@ -25,6 +26,12 @@ def parse_args():
     p.add_argument("--id", dest="device_id", default=os.getenv("TUYA_DEVICE_ID"))
     p.add_argument("--ip", dest="device_ip", default=os.getenv("TUYA_DEVICE_IP"))
     p.add_argument("--key", dest="local_key", default=os.getenv("TUYA_LOCAL_KEY"))
+    p.add_argument(
+        "--switch",
+        type=int,
+        default=int(os.getenv("TUYA_SWITCH", "1")),
+        help="Outlet (DPS index) on a multi-socket strip; 1 for a single plug",
+    )
     p.add_argument("--ver", type=float, default=float(os.getenv("TUYA_VERSION", "3.3")))
     p.add_argument("--retries", type=int, default=3, help="Retries per action on Tuya errors")
     p.add_argument("--retry-delay", type=float, default=2.0, help="Delay between retries in seconds")
@@ -89,22 +96,36 @@ def main():
     if missing:
         raise SystemExit("Missing required values: " + ", ".join(missing))
 
+    # One command at a time per device: boards on different sockets of the same strip are
+    # power-cycled by concurrent jobs, and the strip handles one LAN session at a time.
+    lock = open(f"/tmp/tuya-{args.device_id}.lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+
     d = tinytuya.OutletDevice(args.device_id, args.device_ip, args.local_key)
     d.set_version(args.ver)
     d.set_socketTimeout(args.socket_timeout)
     d.set_socketRetryLimit(max(1, args.socket_retries))
     d.set_socketRetryDelay(max(0.0, args.socket_retry_delay))
 
+    def turn_on():
+        return d.turn_on(switch=args.switch)
+
+    def turn_off():
+        return d.turn_off(switch=args.switch)
+
     if args.cmd == "on":
-        perform_with_retry("on", d.turn_on, args.retries, args.retry_delay)
+        perform_with_retry("on", turn_on, args.retries, args.retry_delay)
     elif args.cmd == "off":
-        perform_with_retry("off", d.turn_off, args.retries, args.retry_delay)
+        perform_with_retry("off", turn_off, args.retries, args.retry_delay)
     elif args.cmd == "cycle":
-        perform_with_retry("off", d.turn_off, args.retries, args.retry_delay)
+        perform_with_retry("off", turn_off, args.retries, args.retry_delay)
         time.sleep(args.delay)
-        perform_with_retry("on", d.turn_on, args.retries, args.retry_delay)
+        perform_with_retry("on", turn_on, args.retries, args.retry_delay)
     else:
-        perform_with_retry("status", d.status, args.retries, args.retry_delay)
+        resp = perform_with_retry("status", d.status, args.retries, args.retry_delay)
+        dps = resp.get("dps") if isinstance(resp, dict) else None
+        if isinstance(dps, dict):
+            print(f"switch {args.switch}: " + {True: "on", False: "off"}.get(dps.get(str(args.switch)), "unknown"))
 
 
 if __name__ == "__main__":

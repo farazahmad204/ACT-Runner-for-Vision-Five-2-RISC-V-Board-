@@ -31,7 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--tuya-config", type=Path, default=Path("devices.json"))
-    parser.add_argument("--device-name", help="Select a named devices.json entry")
+    parser.add_argument("--device-name",
+                        help="Select a named devices.json entry; <name>:<socket> for one outlet of a strip")
     parser.add_argument(
         "--expect-board",
         help="Require every boot to report this board identity",
@@ -78,7 +79,14 @@ def safe_name(path: Path) -> str:
 
 
 def load_tuya_env(config: Path, device_name: str | None) -> dict[str, str]:
+    """Tuya settings for tuya_plug_ctl.py. device_name is a devices.json name, optionally with
+    the outlet of a multi-socket strip: "MELECTRO:1" is socket 1 of the entry "MELECTRO"."""
     env = os.environ.copy()
+    if device_name and ":" in device_name:
+        device_name, switch = device_name.rsplit(":", 1)
+        if not switch.isdigit() or int(switch) < 1:
+            raise ValueError(f"bad outlet {switch!r} in device name; use <name>:<socket number>")
+        env["TUYA_SWITCH"] = switch
     required = ("TUYA_DEVICE_ID", "TUYA_DEVICE_IP", "TUYA_LOCAL_KEY")
     if all(env.get(key) for key in required):
         return env

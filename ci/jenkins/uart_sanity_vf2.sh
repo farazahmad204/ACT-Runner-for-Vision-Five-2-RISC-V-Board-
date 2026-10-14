@@ -15,7 +15,7 @@ export EXPECTED_TEST_NAMES="${EXPECTED_TEST_NAMES-ExceptionsF-00,ExceptionsS-00,
 
 uart_board="${UART_RUNNER_BOARD:-vf2_jh7110}"
 uart_expected_board="${UART_EXPECT_BOARD:-$uart_board}"
-uart_device_name="${UART_DEVICE_NAME:-}"
+uart_device_name="${UART_DEVICE_NAME:-MELECTRO:2}"
 
 stage="${1:-}"
 build_number="${BUILD_NUMBER:-manual}"
